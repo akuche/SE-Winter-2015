@@ -752,6 +752,9 @@ void emitGetchar();
 void syscall_getchar();
 
 void emitPutchar();
+////// Syscall_sched_yield();
+void emitSched_yield();
+void syscall_sched_yield();
 
 // ------------------------ GLOBAL CONSTANTS -----------------------
 
@@ -761,6 +764,8 @@ int SYSCALL_WRITE;
 int SYSCALL_OPEN;
 int SYSCALL_MALLOC;
 int SYSCALL_GETCHAR;
+//////////
+int SYSCALL_SCHED_YIELD;
 
 // ------------------------- INITIALIZATION ------------------------
 
@@ -771,6 +776,8 @@ void initSyscalls() {
     SYSCALL_OPEN    = 4005;
     SYSCALL_MALLOC  = 5001;
     SYSCALL_GETCHAR = 5002;
+    /////
+    SYSCALL_SCHED_YIELD = 5003;
 }
 
 // *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~
@@ -3457,6 +3464,38 @@ void emitPutchar() {
     emitRFormat(OP_SPECIAL, REG_LINK, 0, 0, FCT_JR);
 }
 
+void emitSched_yield() {
+    int *label;
+
+    // "exit"
+    label = createString('e','x','i','t',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+
+    createSymbolTableEntry(GLOBAL_TABLE, label, codeLength, FUNCTION, INT_T);
+
+    emitIFormat(OP_ADDIU, REG_ZR, REG_A3, 0);
+    emitIFormat(OP_ADDIU, REG_ZR, REG_A2, 0);
+    emitIFormat(OP_ADDIU, REG_ZR, REG_A1, 0);
+
+    emitIFormat(OP_LW, REG_SP, REG_A0, 0); // exit code
+    emitIFormat(OP_ADDIU, REG_SP, REG_SP, 4);
+
+    emitIFormat(OP_ADDIU, REG_ZR, REG_V0, SYSCALL_SCHED_YIELD);
+    emitRFormat(0, 0, 0, 0, FCT_SYSCALL);
+}
+
+void syscall_sched_yield() {
+    int exitCode;
+
+    exitCode = *(registers+REG_A0);
+	// call scheduler hier TO DO
+    *(registers+REG_V0) = exitCode;
+
+    print(itoa(exitCode, string_buffer, 10, 0));
+    putchar(CHAR_LF);
+
+    exit(0);
+}
+
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 // double linked list has following structure: 
 //
@@ -3862,6 +3901,8 @@ void fct_syscall() {
         syscall_malloc();
     } else if (*(registers+REG_V0) == SYSCALL_GETCHAR) {
         syscall_getchar();
+    } else if (*(registers+REG_V0) == SYSCALL_SCHED_YIELD) {
+        syscall_sched_yield();
     } else {
         exception_handler(EXCEPTION_UNKNOWNSYSCALL);
     }
@@ -4312,7 +4353,7 @@ void execute() {
 }
 
 
-void  () {
+void run () {
 	int counterInstructions;
 	int instructionsPerSwitch;
 	int *head;
