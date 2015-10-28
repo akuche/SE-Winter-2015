@@ -851,6 +851,9 @@ int EXCEPTION_UNKNOWNFUNCTION;
 
 int *registers; // general purpose registers
 
+int memorySize;
+int *processList;
+
 int pc; // program counter
 int ir; // instruction record
 
@@ -3454,98 +3457,382 @@ void emitPutchar() {
     emitRFormat(OP_SPECIAL, REG_LINK, 0, 0, FCT_JR);
 }
 
-
 //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// double linked list has following structure: 
+//
+// 0 +----+
+//   |prev|
+// 1 +----+  
+//   |next|
+// 2 +----+  
+//   |data|
+// 3 +----+  
+//   | pc |
+// 4 +----+  
+//   |reg |
+// 5 +----+  
+//   |mem |
+// 1 +----+  
 
-int *begin;
-int *end;
+// print pre neighbour, the element itself and next neighbour
+void printListElement(int *element){
 
- void list_create()
-{
-	//empty list
-	begin = 0;
-	end = 0;
+	int *prev;
+	int *next;
+	prev = (int*)*element;
+	next = (int*)*(element+1);
+
+	putchar(10);
+	printString('p','r','e',' ',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+	if(prev != (int*)0)
+		print(itoa(*(prev+2), string_buffer, 10, 0));
+	putchar(10);
+	printString('c','u','r','r',' ',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+	if(element != (int*)0)
+		print(itoa(*(element+2), string_buffer, 10, 0));
+	putchar(10);
+	printString('n','e','x','t',' ',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+	if(next != (int*)0)
+		print(itoa(*(next+2), string_buffer, 10, 0));
+	putchar(10);
+	putchar(10);
 }
 
-void list_insert_end(int data)
-{
-	int *newnode;
-	newnode = malloc (3*4);
-	*newnode = data;
-	*(newnode+2) = 0;
-	if(begin == (int*)0){
-		begin = newnode;
-	}else{
-		*(end+1) = (int)newnode;
+//initialize head and tail
+int* initList(){
+	int *borders;
+	int *head;
+	int *tail;
+	borders = malloc (2*4);
+	head = malloc(4);
+	tail = malloc(4);
+	*head = 0;
+	*tail = 0;
+	*borders = (int)head;
+	*(borders+1) = (int)tail;
+	return borders;
+}
+
+// create list element
+int* createListElement(int data){
+	int *newElement;
+	newElement = malloc (6*4);
+	*(newElement+0) = 0;	//prev
+	*(newElement+1) = 0;	//next
+	*(newElement+2) = data;	// key
+	*(newElement+3) = 0; // pc
+	*(newElement+4) = (int)malloc(32*4); // registers
+	*(newElement+5) = (int)malloc(memorySize*4); // memory
+
+	return newElement;
+}
+
+int isListEmpty(int *borders){
+	if(*borders == 0)
+		return 1;
+	return 0;
+}
+
+// get first element of list
+int* pollListHead(int *borders){
+	return (int*)*borders;
+}
+
+// get last element of list
+int* pollListTail(int *borders){
+	return (int*)*(borders+1);
+}
+
+// add element at the end of the list
+void appendListElement(int *newElement, int *borders){
+	int *head;
+	int *tail;
+	int *pToTail;
+	head = pollListHead(borders);
+	tail = pollListTail(borders);
+
+	if(*head == 0){
+		*head = (int)newElement;
+	} else {
+		*newElement = *tail;
+		pToTail = (int*)*tail;
+		*(pToTail+1) = (int)newElement;
 	}
-	end = newnode;
+	*tail = (int)newElement;
+	*(newElement+1) = 0;
 }
 
-void list_insert_beginning(int data)
-{
-	int *newnode;
-	newnode = malloc (3*4);
-	*(newnode+2) = 0;
-	*newnode = data;
-	*(newnode+1) = (int)begin;
-	begin = newnode;
-	if(end == (int*)0)
-		end = begin;
+// insert new element at specified index
+void insertListElementAtBeginning(int *newElement, int *borders){
+	int *head;
+	int *tail;
+	int *pToHead;
+	head = pollListHead(borders);
+	tail = pollListTail(borders);
+
+	if(*head == 0){
+		*tail = (int)newElement;
+	} else {
+		*(newElement+1) = *head;
+		pToHead = (int*)*head;
+		*pToHead = (int)newElement;
+	}
+	*head = (int)newElement;
+
 }
 
-int *search;
-int *toBeDeleted;
-int i;
-int loop;
+void printList(int *borders){
+	int *head;
+	int *tail;
+	int *curr;
+	head = pollListHead(borders);
+	tail = pollListTail(borders);
 
-void node_remove(int data)
-{
-	if(begin == (int*)0)
-		return;
-	if((*begin) == data){
-		if(begin == end){
-			begin = (int*)0;
-			end = (int*)0;
-		}else{
-			begin = (int*)(*(begin+1));	//adr next node 
+	putchar(10);
+	printString('l','i','s','t',' ','s','t','a','r','t',0,0,0,0,0,0,0,0,0,0);
+
+	if(*head != 0){
+		curr = (int*)*head;
+	
+		while(curr != (int*)*tail){
+			printListElement(curr);
+			curr = (int*)*(curr+1);
 		}
-	}else{
-		loop = 1;
-		search = begin;
-		while(loop == 1){
-			search = (int*)(*(search+1));
-			if(*((int*)(*(search+1))) == data)	//data next node
-				loop = 0;
-			else if((int*)(*(search+1)) == end)
-				loop = 0;
-		}
-//		while(search-1) != data && *(search+1) != end)
-		if (*((int*)(*(search+1))) == data){
-			if((int*)(*(search+1)) == end){ //letztes löschen, search = vorletztes
-				end = search;	//end = vorletztes
-//				*(search+1) = 0;
-			}else{
-				*toBeDeleted = (int*)(*(search+1));
-				*(search+1) = *(toBeDeleted+1);
+		printListElement(curr);
+	} else {
+		putchar(10);
+		putchar(10);
+	}
+
+	printString('l','i','s','t',' ','e','n','d',0,0,0,0,0,0,0,0,0,0,0,0);
+	putchar(10);
+
+}
+
+int* removeFirst(int *borders){
+	int *head;
+	int *tail;
+	int *curr;
+	int *next;
+	int *h;
+	int *t;
+
+	head = pollListHead(borders);
+	tail = pollListTail(borders);
+	
+	if(*head == 0){
+		return (int*)0;
+	} else if(*head == *tail){
+		curr = (int*)*head;
+		h = malloc(4);
+		t = malloc(4);
+		*h = 0;
+		*t = 0;
+		*borders = (int)h;
+		*(borders+1) = (int)t;
+		return curr;
+	} else {
+		curr = (int*)*head;
+		next = (int*)*(curr+1);
+		*(curr+1) = 0;
+		*next = 0;
+		*head = (int)next;
+		return curr;
+	}
+}
+
+void sortList(int *borders){
+	int *head;
+	int *tail;
+	int *curr;
+	int *next;
+	int unsorted;
+	int changes;
+	int tmp;
+
+	head = pollListHead(borders);
+	tail = pollListTail(borders);
+	
+	unsorted = 1;
+	changes = 0;
+	
+	while(unsorted == 1){
+		next = (int*)*head;
+		changes = 0;
+		while(next != (int*)*tail){
+			curr = next;
+			next = (int*)*(curr+1);
+			
+			if(*(curr+2) > *(next+2)){
+				tmp = *(curr+2);
+				*(curr+2) = *(next+2);
+				*(next+2) = tmp;
+				changes = 1;
 			}
 		}
+		if(changes == 0){
+			unsorted = 0;
+		}
 	}
 }
 
- void list_print(){
-	search = begin;
-	while(search != end){
-		print(search);
-		search = (int*)(*(search+1));
+
+int* findElementByData(int data, int *borders){
+	int *head;
+	int *tail;
+	int *curr;
+	head = pollListHead(borders);
+	tail = pollListTail(borders);
+	if(*head != 0){
+
+		curr = (int*)*head;
+		while(curr != (int*)*tail){
+	
+			if(*(curr+2) == data){
+				return curr;
+			}
+			curr = (int*)*(curr+1);
+		}
+		if(*(curr+2) == data){
+			return curr;
+		}
 	}
-	if(begin != end){
-		print(end);
-	}else if(end != (int*)0)
-		print(end);
+	return (int*)0;
+
 }
+
+void saveProcessState(int *currProcess){
+	*(currProcess+3) = pc;
+	*(currProcess+4) = (int)registers;
+	*(currProcess+5) = (int)memory;
+}
+
+void setProcessState(int *currProcess){
+	pc = *(currProcess+3);
+	registers = (int*)*(currProcess+4);
+	memory = (int*)*(currProcess+5);
+}
+
+void testDoubleLinkedList(){
+	int *borders;
+	int *head;
+	int *newElement;
+	int *find;
+	borders = initList();
+	newElement = createListElement('A');
+	appendListElement(newElement, borders);
+	newElement = createListElement('B');
+	appendListElement(newElement, borders);
+	newElement = createListElement('C');
+	appendListElement(newElement, borders);
+	
+	printList(borders);
+	
+	find = findElementByData('D', borders);
+	printListElement(find);
+	
+}
+
+void testDoubleLinkedList2(){
+	int *borders;
+	int *head;
+	int *newElement;
+	int *find;
+	borders = initList();
+
+	newElement = createListElement('A');
+	appendListElement(newElement, borders);
+
+
+	// expected output: 0,65,0 	
+	printList(borders);
+
+	newElement = createListElement('B');
+	appendListElement(newElement, borders);
+
+	// expected output: 0,65,66		65,66,0
+	printList(borders);
+
+	newElement = pollListHead(borders);
+	removeFirst(borders);
+
+	// expected output: 0,66,0 	
+	printList(borders);
+	
+	removeFirst(borders);
+
+	// expected output:  	
+	printList(borders);
+	
+	printListElement((int*)*newElement);
+	appendListElement((int*)*newElement, borders);
+
+	// expected output: 0,66,0 	
+	printList(borders);
+	
+}
+
+void testDoubleLinkedList1(){
+	int *borders;
+	int *head;
+	int *newElement;
+	int *find;
+	borders = initList();
+
+	newElement = createListElement('A');
+	appendListElement(newElement, borders);
+
+
+	// expected output: 0,65,0 	
+	printList(borders);
+
+	newElement = createListElement('B');
+	appendListElement(newElement, borders);
+
+	// expected output: 0,65,66		65,66,0
+	printList(borders);
+
+	removeFirst(borders);
+
+	// expected output: 0,66,0 	
+	printList(borders);
+	
+	newElement = createListElement('C');
+	appendListElement(newElement, borders);
+
+	// expected output: 0,66,67		66,67,0
+	printList(borders);
+
+	removeFirst(borders);
+
+	// expected output: 0,67,0
+	printList(borders);
+
+	removeFirst(borders);
+
+	// expected output: 
+	printList(borders);
+	
+	newElement = createListElement('D');
+	appendListElement(newElement, borders);
+	
+	// expected output: 0,68,0
+	printList(borders);
+
+//	newElement = createListElement('A');
+//	appendListElement(newElement, borders);
+//	sortList(borders);
+
+//	printList(borders);
+	
+
+	
+}
+
+
+
 
 //--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
 
 // *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~
 // -----------------------------------------------------------------
@@ -4024,22 +4311,51 @@ void execute() {
     }
 }
 
+
 void run() {
-	//printString('H','a','l','l','o',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
-	list_create();
-	list_insert_beginning('B');
-	list_insert_end('C');
-	list_insert_beginning('A');
-	list_print();
+	int counterInstructions;
+	int instructionsPerSwitch;
+	int *head;
+	int *tmp;
+
+	counterInstructions = 0;
+	instructionsPerSwitch = 50;
+	
+	head = pollListHead(processList);
+	if(*head != 0){
+		tmp = removeFirst(processList);
+		setProcessState(tmp);
+	}
+	
 	
     while (1) {
-        fetch();
-        decode();
-        pre_debug();
-        execute();
-        post_debug();
+    	
+		if(counterInstructions == instructionsPerSwitch){
+//			printListElement(tmp);
+			// save current state and add element at the end of the list
+			saveProcessState(tmp);
+
+			appendListElement(tmp, processList);
+
+			// switch to next process
+			head = pollListHead(processList);
+			if(*head != 0){
+				tmp = removeFirst(processList);
+				setProcessState(tmp);
+			}
+			
+			
+			counterInstructions = 0;
+		} else {
+		    fetch();
+		    decode();
+		    pre_debug();
+		    execute();
+		    post_debug();
+		    
+		    counterInstructions = counterInstructions + 1;
+		}
     }
-	
 }
 
 void debug_boot(int memorySize) {
@@ -4052,14 +4368,14 @@ void debug_boot(int memorySize) {
 
 int* parse_args(int argc, int *argv, int *cstar_argv) {
     // assert: ./selfie -m size executable {-m size executable}
-    int memorySize;
+//    int memorySize;
 
     memorySize = atoi((int*)*(cstar_argv+2)) * 1024 * 1024 / 4;
 
-    allocateMachineMemory(memorySize*4);
+//    allocateMachineMemory(memorySize*4);
 
     // initialize stack pointer
-    *(registers+REG_SP) = (memorySize - 1) * 4;
+//    *(registers+REG_SP) = (memorySize - 1) * 4;
 
     debug_boot(memorySize);
 
@@ -4146,14 +4462,30 @@ void up_copyArguments(int argc, int *argv) {
 }
 
 int main_emulator(int argc, int *argv, int *cstar_argv) {
+	int counterProcesses;
+	int counter;
+	int *file;
+	int *currProcess;
+	counter = 0;
+	counterProcesses = 5;
+	processList = initList();
+
+	file = parse_args(argc, argv, cstar_argv);
+
     initInterpreter();
 
-    *(registers+REG_GP) = loadBinary(parse_args(argc, argv, cstar_argv));
-
-    *(registers+REG_K1) = *(registers+REG_GP);
-
-    up_copyArguments(argc-3, argv+3);
-
+	while(counter < counterProcesses){
+		currProcess = createListElement(counter);
+		appendListElement(currProcess, processList);
+		registers = (int*)*(currProcess + 4);
+		memory = (int*)*(currProcess + 5);
+		*(registers+REG_SP) = (memorySize - 1) * 4;
+		*(registers+REG_GP) = loadBinary(file);
+		*(registers+REG_K1) = *(registers+REG_GP);
+		
+	    up_copyArguments(argc-3, argv+3);
+		counter = counter + 1;		
+	}
     run();
 
     exit(0);
@@ -4206,9 +4538,10 @@ int* copyC2CStarArguments(int argc, int *argv) {
 }
 
 int main(int argc, int *argv) {
-
     int *cstar_argv;
     int *firstParameter;
+
+	memorySize = 32;
 
     initLibrary();
 
@@ -4231,6 +4564,9 @@ int main(int argc, int *argv) {
 				}
                 else
                     exit(-1);
+            }
+            else if(*(firstParameter+1) == 'l'){
+            	testDoubleLinkedList();
             }
             else {
                 exit(-1);
