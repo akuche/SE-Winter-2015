@@ -4344,7 +4344,6 @@ void run() {
 				setProcessState(tmp);
 			}
 			
-			
 			counterInstructions = 0;
 		} else {
 		    fetch();
@@ -4467,7 +4466,7 @@ int main_emulator(int argc, int *argv, int *cstar_argv) {
 	int *file;
 	int *currProcess;
 	counter = 0;
-	counterProcesses = 5;
+	counterProcesses = 1;
 	processList = initList();
 
 	file = parse_args(argc, argv, cstar_argv);

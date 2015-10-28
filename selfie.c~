@@ -4467,7 +4467,7 @@ int main_emulator(int argc, int *argv, int *cstar_argv) {
 	int *file;
 	int *currProcess;
 	counter = 0;
-	counterProcesses = 5;
+	counterProcesses = 2;
 	processList = initList();
 
 	file = parse_args(argc, argv, cstar_argv);
@@ -4477,8 +4477,8 @@ int main_emulator(int argc, int *argv, int *cstar_argv) {
 	while(counter < counterProcesses){
 		currProcess = createListElement(counter);
 		appendListElement(currProcess, processList);
-		registers = (int*)*(currProcess + 4);
-		memory = (int*)*(currProcess + 5);
+		registers = *(currProcess + 4);
+		memory = *(currProcess + 5);
 		*(registers+REG_SP) = (memorySize - 1) * 4;
 		*(registers+REG_GP) = loadBinary(file);
 		*(registers+REG_K1) = *(registers+REG_GP);
