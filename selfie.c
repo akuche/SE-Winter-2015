@@ -4312,7 +4312,7 @@ void execute() {
 }
 
 
-void run() {
+void  () {
 	int counterInstructions;
 	int instructionsPerSwitch;
 	int *head;
