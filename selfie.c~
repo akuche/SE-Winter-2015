@@ -3467,8 +3467,8 @@ void emitPutchar() {
 void emitSched_yield() {
     int *label;
 
-    // "exit"
-    label = createString('e','x','i','t',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+    // "sched_yield"
+    label = createString('y','i','e','l','d',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
 
     createSymbolTableEntry(GLOBAL_TABLE, label, codeLength, FUNCTION, INT_T);
 
@@ -3476,8 +3476,8 @@ void emitSched_yield() {
     emitIFormat(OP_ADDIU, REG_ZR, REG_A2, 0);
     emitIFormat(OP_ADDIU, REG_ZR, REG_A1, 0);
 
-    emitIFormat(OP_LW, REG_SP, REG_A0, 0); // exit code
-    emitIFormat(OP_ADDIU, REG_SP, REG_SP, 4);
+   // emitIFormat(OP_LW, REG_SP, REG_A0, 0); // exit code TO DO
+   // emitIFormat(OP_ADDIU, REG_SP, REG_SP, 4);
 
     emitIFormat(OP_ADDIU, REG_ZR, REG_V0, SYSCALL_SCHED_YIELD);
     emitRFormat(0, 0, 0, 0, FCT_SYSCALL);
@@ -4353,7 +4353,7 @@ void execute() {
 }
 
 
-void  () {
+void run () {
 	int counterInstructions;
 	int instructionsPerSwitch;
 	int *head;
@@ -4507,7 +4507,7 @@ int main_emulator(int argc, int *argv, int *cstar_argv) {
 	int *file;
 	int *currProcess;
 	counter = 0;
-	counterProcesses = 1;
+	counterProcesses = 2;
 	processList = initList();
 
 	file = parse_args(argc, argv, cstar_argv);
