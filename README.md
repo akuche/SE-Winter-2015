@@ -59,3 +59,44 @@ This assignment deals with cooperative multitasking of _n_ processes in mipster 
 * implement [cooperative multitasking](https://en.wikipedia.org/wiki/Computer_multitasking) through a yield system call, i.e., a user process calling [sched_yield()](http://linux.die.net/man/2/sched_yield) will cause the OS to re-schedule
 * implement a simple user program that demonstrates yielding, e.g, yield each time after printing a counter to the console
 * Deadline: Oct 29, end of day
+
+
+Assignment 3: Mutual Exclusion
+------------------------------
+
+Build this assignment on top of Assignment 2. Make sure that segmentation of memory works correctly.
+
+* implement a single global lock through mipster syscalls, e.g., a lock() and unlock() call.
+* implement a simple user program that demonstrates mutual exclusion, e.g, show that one process inside the critical section makes progress, processes not taking the lock make progress, and processes waiting for the lock do not make progress. Hint: you can implement the [getpid](http://linux.die.net/man/2/getpid) system call to identify processes.
+* experiment with and demonstrate different interleavings: using locks, no locks, different time slices
+* Deadline: Nov 5, end of day
+
+* Bonus: implement basic multi-threading support
+ * Idea: threads share one address space, processes don't
+ * when duplicating processes, create threads instead, i.e., shared code, heap, globals, but private call stacks, private PC, private registers
+
+
+Assignment 4: Fork and Wait
+---------------------------
+
+From now on, processes will trigger process creation and synchronization.
+
+* Remove the process duplication code from Assignment 1 from selfie
+* Implement the [fork](http://linux.die.net/man/2/fork) and [wait](http://linux.die.net/man/2/wait) system calls
+* Read the man pages carefully to understand the semantics of both calls
+* Modify the exit call such that terminating childprocesses do not quit the emulator
+* Provide a demo process forking at least one child process that performs a different task along with the parent process. Play with interleavings and locks between parent and children
+* Deadline: Nov 12, end of day
+
+Assignment 5: Virtual Memory
+----------------------------
+
+* implement on-demand paging instead of memory segmentation in the emulator.
+* partition the emulated memory (like physical memory on a real machine) into 4KB frames.
+* each process gets a 4MB virtual address space, i.e., each process may access any address between 0x0 to 0x3FFFFFF. Virtual address space is organised in 4KB pages
+* whenever a process actually accesses an address, allocate a frame and provide a mapping between pages and frames, i.e., a page table for each process
+* modify the tlb function accordingly
+* provide a demo program that allocates the whole virtual memory space but only accesses, for example, 128 different addresses evenly distributed within that region. Make sure that in this case only 128 frames are actually allocated, not the whole 4MB.
+* page replacement and swapping is not required in this assignment
+
+* Deadline: November 26, end of day
