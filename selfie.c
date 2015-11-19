@@ -1,4 +1,3 @@
-
 // Copyright (c) 2015, the Selfie Project authors. All rights reserved.
 // Please see the AUTHORS file for details. Use of this source code is
 // governed by a BSD license that can be found in the LICENSE file.
@@ -642,8 +641,7 @@ int *zombieQueue;		// processes that are childs but parent is not waiting yet
 
 int *currProcess;		// currently operating process 
 
-int *segmentationTable;	// pointer to segmentation table
-int *currSegment;		// 
+int *currPageTable;
 
 int isEmulating = 0;	// needed for range checks
 
@@ -652,107 +650,20 @@ int lockID = 0;			// id of process holding the lock
 int lockCounter = 0;
 
 int nextValidPID = 0;	// unique id for next process
-int maxNrProcesses = 5;	// maximum number of processes;
+int maxNrProcesses = 2;	// maximum number of processes;
 
 int counterInstr = 0;	// currently processed instruction counter
 int maxInstr = 500;		// syscall_yield should be invoked every 'maxInstr'
 
+int pageSize = 4096;	//Byte
+int vMemorySize = 4194304; //Byte
 
-int* init_page_table();		// pagetable
-int page_index;		// index of pagination
-//int* create_page();			// create an empty page
-int* create_page(int va);	// create a page for a given virtual address
-void set_virtual_address(int va, int* page);	
-void set_physical_address(int va,int* page);
-void set_status(int s, int* page);
-int get_virtual_address(int* page);
-int get_physical_address(int* page);
-int get_status(int* page);
-
-int* init_page_table();	// create the pagetable
-int lookup(int va);		//
-int* return_page(int addr);
-void insertPageEntry(int addr);
-void removePage(int addr);
-int get_page_index();
-int* mappedPage(int va, int* pa);
-
-int mapping;
+int *pFreeList = (int*)0;
 
 // ---------------------    methods   ---------------------
 
-////////////////////////////////////////////////////////////////////////////////
-int* init_page_table(){
-	page_index = 0;	
-}
-
-init_free_list(){
-	
-}
-
-int* create_page(int va){
-	int* page;				// pageframe
-	int virtual_address;	// virtual address
-	int physical_address;	//physical address
-	int status;				// status of the pageframe
-	
-	page = malloc(6*4); // position 0 and 1 are reserved for prev and next in the list
-	*(page+2) =  get_page_index;
-	*(page + 3) = va;
-	*(page + 4) = -1;
-	*(page + 5) = 0;	
-	return page;
-}
-
-void set_virtual_address(int va,int* page){
-	*(page + 3) = va;
-}
-	
-void set_physical_address(int pa,int* page){
-	*(page + 4) = pa;
-}
-
-void set_status(int s, int* page){
-	*(page + 5) = s;
-}
-
-int get_virtual_address(int* page){
-	return *(page + 3);
-}
-
-int get_physical_address(int* page){
-	return *(page + 4);
-}
-
-int get_status(int* page){
-	return *(page + 5);
-}
-
-int get_page_index(){
-	int index;
-	index = page_index;
-	page_index++;
-	return index;
-}
-
-int* mappedPage(int va, int* pa){
-	int* mapping;
-	mapping = malloc(4*4); // first two position for next and prev
-	*(mapping + 2) = va;
-	*(mapping + 3) = (int)pa;
-	return mapping;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-
 // print methods
 void printList(int *list, int type, int verbose);
-
-void printSegmentationTableEntryVerbose(int *element);
-void printSegmentationTableEntry(int *element);
-void printSegmentationTable(int *list);
-void printSegmentationTableVerbose(int *list);
 
 void printProcessVerbose(int *element);
 void printProcess(int *element);
@@ -780,8 +691,6 @@ void setProcessState();
 void switchProcess(int finished);
 void switchFromFinishedProcess();
 void switchFromUnfinishedProcess();
-int* getSegmentEntry(int *process);
-void setSegmentEntry(int *process, int *entry);
 int* getRegisters(int *process);
 int  getPC(int *process);
 
@@ -802,17 +711,14 @@ int* getChildQueue(int *process);
 
 int* getNextWantedProcess(int pid, int *primaryQueue, int *secondaryQueue, int *tertiaryQueue);
 
-// segmentation table entry operations
-int* createSegmentationTableEntry(int pid, int segmentSize);
-int* getSegmentatinTableEntry(int pid, int *list);
-int* getMemorySegmentStart(int *segment);
-int  getMemorySegmentSize(int *segment);
-
-
 void continueExecuting();
 void releaseLock();
 
-
+void switchFromKilledProcess();
+void killProcess(int *process);
+int* pmalloc();
+void initFreeList();
+int* createPageTable();
 
 
 // -----------------------------------------------------------------
@@ -955,7 +861,9 @@ void initMemory(int bytes) {
     memoryBumpPointer = (int)memory;
     usedMemorySize = 0;
 
+	*pFreeList = (int)memory;
 }
+
 
 // -----------------------------------------------------------------
 // ------------------------- INSTRUCTIONS --------------------------
@@ -989,7 +897,7 @@ void resetInterpreter();
 
 void printException(int enumber);
 
-void exception_handler(int enumber);
+int* exception_handler(int enumber);
 
 void fetch();
 void execute();
@@ -1024,7 +932,8 @@ int EXCEPTION_UNKNOWNINSTRUCTION = 3;
 int EXCEPTION_HEAPOVERFLOW       = 4;
 int EXCEPTION_UNKNOWNSYSCALL     = 5;
 int EXCEPTION_UNKNOWNFUNCTION    = 6;
-int EXCEPTION_SEGMENTATIONFAULT  = 7;
+int EXCEPTION_PAGEFAULT			 = 7;
+int EXCEPTION_MEMORYOUTOFBOUNDS  = 8;
 
 int *EXCEPTIONS; // array of strings representing exceptions
 
@@ -1059,7 +968,7 @@ int *storesPerAddress = (int*) 0; // number of executed stores per store operati
 // ------------------------- INITIALIZATION ------------------------
 
 void initInterpreter() {
-    EXCEPTIONS = malloc(8*4);
+    EXCEPTIONS = malloc(9*4);
 
     *(EXCEPTIONS + EXCEPTION_SIGNAL)             = (int) "signal";
     *(EXCEPTIONS + EXCEPTION_ADDRESSERROR)       = (int) "address error";
@@ -1067,7 +976,8 @@ void initInterpreter() {
     *(EXCEPTIONS + EXCEPTION_HEAPOVERFLOW)       = (int) "heap overflow";
     *(EXCEPTIONS + EXCEPTION_UNKNOWNSYSCALL)     = (int) "unknown syscall";
     *(EXCEPTIONS + EXCEPTION_UNKNOWNFUNCTION)    = (int) "unknown function";
-    *(EXCEPTIONS + EXCEPTION_SEGMENTATIONFAULT)  = (int) "segmentation fault [added]";
+    *(EXCEPTIONS + EXCEPTION_PAGEFAULT)			 = (int) "page fault [added]";
+ 	*(EXCEPTIONS + EXCEPTION_MEMORYOUTOFBOUNDS)  = (int) "memory out of bounds [added]"; 
 
     registers = malloc(32*4);
 }
@@ -4048,7 +3958,7 @@ void syscall_write() {
     int vaddr;
     int fd;
     int *buffer;
-//    syscall_lock();
+    syscall_lock();
 	size  = *(registers+REG_A2);
 	vaddr = *(registers+REG_A1);
 	fd    = *(registers+REG_A0);
@@ -4070,7 +3980,7 @@ void syscall_write() {
         print(itoa(fd, string_buffer, 10, 0, 0));
         println();
     }
-//	syscall_unlock();
+	syscall_unlock();
 }
 
 void emitOpen() {
@@ -4327,7 +4237,6 @@ void syscall_wait(){
 	waitForPID = *(registers+REG_A0);
 
 	if(waitForPID != getParentPID(currProcess)){
-		waitForPID = *(registers+REG_A0);
 
 		childListOfParent = getChildQueue(currProcess);
 		child = createChild(waitForPID);
@@ -4360,67 +4269,18 @@ void syscall_wait(){
 // 4 +-----+  
 //   |reg  | pointer to registers
 // 5 +-----+  
-//   |mem  | pointer to  entry in segmentation table
+//   | pt  | pointer to page table
 // 6 +-----+ 
-//  |child | pointer on the list of childProcess
+//   |vmem | pointer to virtual memory
 // 7 +-----+ 
-// |status | status isWaiting:
-// 8 +-----+ 
-//   | 	   | 
+//   |PPID | parent process ID
+// 8 +-----+  
+//   |mem  | pointer to page table
 // 9 +-----+ 
+//   |WAIT | status if process is waiting for child(ren)
+// 7 +-----+ 
 
 
-// print segmentation table entry
-void printSegmentationTableEntryVerbose(int *element){
-	int *prev;
-	int *next;
-	prev = (int*)*element;
-	next = (int*)*(element+1);
-
-	print((int*)"pre ");
-	if(prev != (int*)0)
-		print(itoa(getProcessID(prev), string_buffer, 10, 0, 0));
-	println();
-
-	print((int*)"pid ");
-	if(element != (int*)0)
-		print(itoa(getProcessID(element), string_buffer, 10, 0, 0));
-	println();
-
-	print((int*)"next ");
-	if(next != (int*)0)
-		print(itoa(getProcessID(next), string_buffer, 10, 0, 0));
-	println();
-
-	print((int*)"segPos ");
-	if(element != (int*)0)
-		print(itoa(*(element+3), string_buffer, 10, 0, 0));
-	println();
-
-	print((int*)"segSize ");
-	if(element != (int*)0)
-		print(itoa(*(element+4), string_buffer, 10, 0, 0));
-	println();
-
-}
-
-void printSegmentationTableEntry(int *element){
-if(0){
-	print((int*)"owning pid ");
-	if(element != (int*)0)
-		print(itoa(getProcessID(element), string_buffer, 10, 0, 0));
-	println();
-	}
-	print((int*)"segPos ");
-	if(element != (int*)0)
-		print(itoa(*(element+3), string_buffer, 10, 0, 0));
-	println();
-
-	print((int*)"segSize ");
-	if(element != (int*)0)
-		print(itoa(*(element+4), string_buffer, 10, 0, 0));
-	println();
-}
 
 void printProcess(int *element){
 	print((int*)"pid ");
@@ -4466,8 +4326,6 @@ void printProcessVerbose(int *element){
 		print(itoa(getPC(element), string_buffer, 10, 0, 0));
 	println();
 
-	printSegmentationTableEntry(segEntry);
-
 }
 
 void printProcessList(int *list){
@@ -4476,16 +4334,9 @@ void printProcessList(int *list){
 void printProcessListVerbose(int *list){
 	printList(list, 0, 1);
 }
-void printSegmentationTable(int *list){
-	printList(list, 1, 0);
-}
-void printSegmentationTableVerbose(int *list){
-	printList(list, 1, 1);
-}
 
 // print the list
 // if type == 0: print list of processes
-// if type == 1: print list of segmentation table entries
 void printList(int *list, int type, int verbose){
 	int *pToHead;
 	int *pToTail;
@@ -4505,13 +4356,9 @@ void printList(int *list, int type, int verbose){
 			if(verbose == 0){
 				if(type == 0)
 					printProcess(curr);
-				else if(type == 1)
-					printSegmentationTableEntry(curr);
 			} else if (verbose == 1){
 				if(type == 0)
 					printProcessVerbose(curr);
-				else if(type == 1)
-					printSegmentationTableEntryVerbose(curr);
 			}
 			curr = (int*)*(curr+1);
 			println();
@@ -4539,15 +4386,6 @@ int* initList(){
 	return list;
 }
 
-// @return: entry in segmentation table for "pid"
-int* getSegmentationTableEntry(int pid, int *list){
-	int *entry;
-	
-	entry = findElementByPID(pid, list);
-	if((int)entry != 0)
-		return entry;
-}
-
 // create list element
 // @return: new list element
 int* createProcess(){
@@ -4555,29 +4393,30 @@ int* createProcess(){
 	int pid;
 	pid = nextValidPID;
 	nextValidPID = nextValidPID+1;
-	newElement = malloc (9*4);
+	newElement = malloc (10*4);
 	*(newElement+0) = 0;	// prev
 	*(newElement+1) = 0;	// next
 	*(newElement+2) = pid;	// process ID
 	*(newElement+3) = 0;	// pc
 	*(newElement+4) = (int)malloc(32*4);	// registers
-	*(newElement+5) = 0; // pointer to entry in segmentation table
-	*(newElement+6) = -1; // parentPID
-	*(newElement+7) = (int)initList(); // list for child processes
-	*(newElement+8) = 0; // status isWaiting: 1 if waiting, 0 otherwise
+	*(newElement+5) = (int)createPageTable();// pointer to page table   0;
+	*(newElement+6) = 0; // pointer to virtual memory
+	*(newElement+7) = -1; // parentPID
+	*(newElement+8) = (int)initList(); // list for child processes
+	*(newElement+9) = 0; // status isWaiting: 1 if waiting, 0 otherwise
 	return newElement;
 }
 
 int isProcessWaiting(int *process){
-	return *(process+8);
+	return *(process+9);
 }
 
 void setProcessWaitingStatus(int *process){
-	*(process+8) = 1;
+	*(process+9) = 1;
 }
 
 void unsetProcessWaitingStatus(int *process){
-	*(process+8) = 0;
+	*(process+9) = 0;
 }
 
 // create child for childlist
@@ -4610,7 +4449,7 @@ int* getNextWantedProcess(int pid, int *primaryQueue, int *secondaryQueue, int *
 }
 
 int* getChildQueue(int *process){
-	return (int*)*(process+7);
+	return (int*)*(process+8);
 }
 
 //@return: pid of current process
@@ -4744,6 +4583,34 @@ void sortList(int *list){
 	}
 }
 
+//wait status setzen???
+void removeElement(int *process){
+	int *curr;
+	int size;
+	int i;
+	i = 0;
+	size = getListSize(readyQueue);
+	while(i< size){
+		curr = removeFirst(readyQueue);
+		if(curr == process){
+			return;
+		}
+		appendListElement(curr, readyQueue);
+		i=i+1;
+	}
+	i =0 ;
+	size = getListSize(blockedQueue);
+	while(i< size){
+		curr = removeFirst(blockedQueue);
+		if(curr == process){
+			return;
+		} 
+		appendListElement(curr, blockedQueue);
+		i=i+1;
+	}
+		
+}
+
 void swap(int *curr, int *next, int *list){
 	int *prev;
 	int *nextButOne;
@@ -4810,24 +4677,18 @@ void saveProcessState(){
 	setRegisters(currProcess, registers);
 }
 
-// set pc, registers and memory segment of current process
+// set pc, registers of current process
 void setProcessState(){
-	currSegment = getSegmentEntry(currProcess);
 	registers = getRegisters(currProcess);
 	pc = getPC(currProcess);
-	memory = getMemorySegmentStart(currSegment);
 }
 
 void setParentPID(int *process, int data){
-	*(process+6) = data;	
+	*(process+7) = data;	
 }
 
 int getParentPID(int *process){
-	return *(process+6);
-}
-
-void setSegmentEntry(int *process, int *entry){
-	*(process+5) = (int)entry;
+	return *(process+7);
 }
 
 void setPC(int *process, int data){
@@ -4838,34 +4699,14 @@ void setRegisters(int *process, int *registers){
 	*(process+4) = (int)registers;
 }
 
-// create an entry in the segmentation table
-int* createSegmentationTableEntry(int pid, int segmentSize){
-	int *newSegmentationTableEntry;
-	usedMemorySize = usedMemorySize + segmentSize;
-	if(usedMemorySize > memorySize){
-		exception_handler(EXCEPTION_SEGMENTATIONFAULT);
-	}
-	newSegmentationTableEntry = malloc(5*4);
-	*(newSegmentationTableEntry+0) = 0;	// prev
-	*(newSegmentationTableEntry+1) = 0;	// next
-	*(newSegmentationTableEntry+2) = pid;	// process ID of the process that is linked with this segment
-	*(newSegmentationTableEntry+3) = memoryBumpPointer;	// memory segment
-	*(newSegmentationTableEntry+4) = segmentSize;		// segmentSize
+// size is byte-addressed
+int* createPageTable(){
+	int *pageTable;
+	pageTable = malloc(vMemorySize/pageSize);
 	
-	memoryBumpPointer = memoryBumpPointer + segmentSize;
-
-	return newSegmentationTableEntry;
+	return pageTable;
 }
 
-int* getSegmentEntry(int *process){
-	return (int*)*(process+5);
-}	
-int* getMemorySegmentStart(int *segment){
-	return (int*)*(segment+3);
-}
-int getMemorySegmentSize(int *segment){
-	return *(segment+4);
-}
 int* getRegisters(int *process){
 	return (int*)*(process+4);
 }
@@ -4891,32 +4732,6 @@ int getListSize(int *list){
 
 int* getNextListElement(int *process){
 	return (int*)*(process+1);
-}
-
-int allChildrenTerminated1(int *process){
-	int *childrenList;
-	int *current;
-	int currentID;
-	int containsCurrent;
-	int *currentZombie;
-	
-	childrenList = getChildQueue(process);
-	if(isListEmpty(childrenList))
-		return 0;
-	current = (int*)*childrenList;
-	while((int)current != 0){
-		containsCurrent = 0;
-		currentID = getProcessID(current);
-		currentZombie = (int*)*zombieQueue;
-		while((int)currentZombie != 0){
-			if(currentID == getProcessID(currentZombie)){
-				containsCurrent = 1;
-			}
-		}
-		if(containsCurrent == 0)
-			return 0;
-	}
-	return 1;
 }
 
 // @return: 1 if all children of process terminated 
@@ -4987,8 +4802,40 @@ void notify(int *process){
 }
 
 void releaseLock(){
-	lock = 0;
-	lockCounter = 0;
+	if(lock == 1){
+		if(lockID == getProcessID(currProcess)){
+			lock = 0;
+			lockCounter = 0;
+		}
+	}
+}
+
+void killProcess(int *process){
+	int *childList;
+	int *currChild;
+	int *childProcess;
+	int size;
+	int i;
+	i=0;
+	childList = getChildQueue(process);
+	size = getListSize(childList);
+
+	while(i< size){
+		currChild = removeFirst(childList);
+		
+		childProcess = findElementByPID(getProcessID(currChild), readyQueue);
+		if((int)childProcess == 0){
+			childProcess = findElementByPID(getProcessID(currChild), blockedQueue);
+		}
+		if((int)childProcess != 0){
+			killProcess(childProcess);
+	
+			removeElement(childProcess);
+		}
+		i=i+1;
+	}
+	switchFromKilledProcess();
+	
 }
 
 //@return: first "not waiting" process in blockedQueue
@@ -5017,6 +4864,19 @@ int* getNextNotWaitingProcess(){
 
 }
 
+void switchFromKilledProcess(){
+	releaseLock();
+	killProcess(currProcess);
+
+	if(isListEmpty(readyQueue) == 0){
+		currProcess = removeFirst(readyQueue);
+	} else {
+		currProcess = getNextNotWaitingProcess(blockedQueue);
+		if((int)currProcess == 0)
+			exit(-1);
+	}
+	counterInstr = 0;
+}
 void switchFromFinishedProcess(){
 	int *parentProcess;
 	saveProcessState();
@@ -5027,8 +4887,7 @@ void switchFromFinishedProcess(){
 			// --> there is no parent
 			// --> currProcess can terminate
 			// all other processes can be killed because all other (probably existing) processes are children
-			// of this master parent but there was no wait(PID) call
-//			continueExecuting();
+			// of this master process but there was no wait(PID) call
 			exit(0);
 		} else {
 			// this currProcess has a parent --> currProcess is added to the zombieQueue
@@ -5052,11 +4911,10 @@ void switchFromFinishedProcess(){
 			
 		}
 	} else {
-		// not implemented yet, occurs when a parentProcess does not invoke wait(PID) on his child's PID
+		// not implemented yet, occurs when a parent process (not the master process)
+		// does not invoke wait(PID) on his child's PID
 		// children of this process are alive
-		// 2 possibilities: 1. invoke wait
-		//					2. kill all children (recursively)
-		//continueExecuting();
+		// 2 possibilities: 1. invoke wait, 2. kill all children (recursively)
 		exit(-1);
 	}
 	if(lock){
@@ -5070,6 +4928,7 @@ void switchFromFinishedProcess(){
 	} else {
 		currProcess = getNextNotWaitingProcess();	// get next (not waiting) process from blockedQueue
 	}
+	counterInstr = 0;
 }
 
 void switchFromUnfinishedProcess(){
@@ -5121,22 +4980,14 @@ int* duplicateProcess(){
 	int *childProcess;
 	int *childSegEntry;
 	
-	//get data of parent
-	parentSegEntry = getSegmentEntry(currProcess);	
-	parentMemorySize = getMemorySegmentSize(parentSegEntry);
-
-	// create child process and segmentation table entry
+	// create child process 
 	childProcess = createProcess();
-	childSegEntry = createSegmentationTableEntry(getProcessID(childProcess), parentMemorySize);
-	appendListElement(currSegment, segmentationTable);
 
 	// set data of child
 	setParentPID(childProcess, getProcessID(currProcess));
-	setSegmentEntry(childProcess, childSegEntry);
 	saveProcessState();
 	setPC(childProcess, *(registers+REG_RA));
 	copyRegisters(getRegisters(childProcess), registers);
-	copyMemory(getMemorySegmentStart(childSegEntry), getMemorySegmentStart(parentSegEntry), parentMemorySize);
 
 	// add to process list
 	appendListElement(childProcess, readyQueue);
@@ -5171,6 +5022,50 @@ void copyMemory(int *copyTo, int *copyFrom, int memorySize){
 // -----------------------------------------------------------------
 // ---------------------------- MEMORY -----------------------------
 // -----------------------------------------------------------------
+
+void initFreeList(){
+	int *curr;
+	int counter;
+	int max;
+	max = memorySize/pageSize;
+	counter = 0;
+	curr = memory;
+	while(counter < max){
+		if(counter == max - 1){
+			*curr = 0;
+		} else {
+			*curr = (int)curr + pageSize;
+			curr = (int*)*curr;
+		}
+		counter = counter + 1;
+	}
+	
+}
+
+int* pmalloc(){
+	int *nextPage;
+	if(pFreeList == (int*)0){
+		exception_handler(EXCEPTION_MEMORYOUTOFBOUNDS);
+	} else {
+		nextPage = (int*)*pFreeList;
+		if(*pFreeList == 0){
+			pFreeList = (int*)0;
+		} else {
+			pFreeList = (int*)*pFreeList;
+		}
+	}
+	return nextPage;
+}
+
+void pfree(int *page){
+	*page = (int)pFreeList;
+	pFreeList = page;
+}
+
+
+
+
+
 int tlb(int vaddr) {
 	int addr;
     if (vaddr % 4 != 0)
@@ -5178,10 +5073,10 @@ int tlb(int vaddr) {
 	addr = vaddr/4;
 	if(isEmulating){
 		if(memoryStartAddress > ((int)memory + addr)){ // addressed memory is below memory start address
-  			print((int*)"tlb first: ");exception_handler(EXCEPTION_SEGMENTATIONFAULT);
+ // 			print((int*)"tlb first: ");exception_handler(EXCEPTION_SEGMENTATIONFAULT);
 		}
 		if(memoryStartAddress + memorySize < ((int)memory + addr)){ // addressed memory is greater than memory
-			print((int*)"tlb second: ");exception_handler(EXCEPTION_SEGMENTATIONFAULT);
+	//		print((int*)"tlb second: ");exception_handler(EXCEPTION_SEGMENTATIONFAULT);
 		}
 //		if(nextValidPID != 0){
 //			if(*(currSegment+4) < addr){
@@ -5895,13 +5790,18 @@ void printException(int enumber) {
     print((int*) *(EXCEPTIONS + enumber));
 }
 
-void exception_handler(int enumber) {
+int* exception_handler(int enumber) {
     print(binaryName);
     print((int*) ": exception: ");
     printException(enumber);
     println();
 
-    exit(enumber);
+	if(enumber == EXCEPTION_PAGEFAULT){
+		return pmalloc();
+	} else if(enumber == EXCEPTION_MEMORYOUTOFBOUNDS){
+		switchFromKilledProcess();
+	} else 
+		exit(enumber);
 }
 
 void fetch() {
@@ -5986,6 +5886,7 @@ void run() {
 	halt = 0;
 	currProcess = removeFirst(readyQueue);
 	setProcessState();
+	
 	while(halt==0){
  	    fetch();
 		continueExecuting();
@@ -6216,9 +6117,7 @@ void disassemble() {
 }
 
 void emulate(int argc, int *argv) {
-	int segmentSize;
 	isEmulating = 1;
-	segmentSize = 4*1024*1024;
     interpret = 1;
 
     print(selfieName);
@@ -6229,26 +6128,21 @@ void emulate(int argc, int *argv) {
     print((int*) "MB of memory");
     println();
 
- 	copyBinaryToMemory();
     resetInterpreter();
 
  	readyQueue = initList();
-    segmentationTable = initList();
 	blockedQueue = initList();
 	zombieQueue = initList();
 	
-	
 	currProcess = createProcess();
-	currSegment = createSegmentationTableEntry(getProcessID(currProcess), segmentSize);
-	*(currProcess+5) = (int)currSegment;
-	appendListElement(currSegment, segmentationTable);
 	appendListElement(currProcess, readyQueue);
 
 	setProcessState();
+ 	copyBinaryToMemory();
 
 	*(registers+REG_GP) = binaryLength;
 	*(registers+REG_K1) = *(registers+REG_GP);
-	*(registers+REG_SP) = *(currSegment+4)-4;
+	*(registers+REG_SP) = pageSize - 4;
 
 	up_copyArguments(argc, argv);
 		
