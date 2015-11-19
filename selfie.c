@@ -4367,6 +4367,106 @@ void printList(int *list, int type, int verbose){
 	print((int*)"print list end");
 	println();
 }
+//////////////////////////////////////////////////////////////////////////////
+////// implementation of freelist with linkedList instead of doubly ///////
+
+int  page_index;		// index of the page
+int *head;				
+int *tail;
+int max_freelist;	// maximal number of free pages in System
+int size_freelist;  // effectiv number of free pages in the list
+
+void init_free_list();
+int* insert_in_freelist(int page_index, int* phy_addr, int status);
+int remove_from_freelist(int page_index);
+int* search_in_freelist(int index);
+int* get_first_freelist();
+
+void init_free_list() {
+	int phys_addr = 0;
+	size_freelist = 0;
+    page_index  = 0;
+    head = 0;
+    tail = 0;
+    max_freelist = memorySize/pageSize; 
+    while (phys_addr < memorySize){
+    	insert_in_freelist(page_index, phys_addr,0);
+    	phys_addr + pageSize;
+    }
+   pFreeList = head;
+}
+
+// insert: insert new page with its index, status and phys_addr
+int* insert_in_freelist(int page_index, int* phy_addr, int status) {
+    if(size_freelist < max_freelist){
+		int *new_page;
+		new_page = malloc(4*4);
+
+		if ((int)head == 0)
+		    head = new_page;
+		else
+		    *tail = (int)new_page;
+
+		*new_page = 0;   // pointed to NULL
+		*(new_page + 1) = page_index;
+		*(new_page + 2) = (int)phy_addr;
+		*(new_page + 3) = status;
+
+		tail = new_page;
+		size_freelist++;
+   	    return new_page;
+   	 }
+   	 return (int*)0;
+}
+
+
+// remove a page from freelist
+int remove_from_freelist(int page_index) {
+    int *temp;
+    int *next;
+
+  	 temp = head;
+
+    if (*(temp+1) == page_index) {
+        head = (int*)*temp;
+        size_freelist--;
+        return 1;
+    }
+    while ((int)temp != 0) {
+        next = (int*)*temp;
+        if (*(next+1) == page_index) {
+            *temp = *next;
+            if (next == tail) {
+                tail = temp;
+            }
+             size_freelist--;
+            return 1;
+        }
+        temp = (int*)*temp;
+    }
+    return -1;
+}
+
+// search for a page by its index in freeList
+int* search_in_freelist(int index) {
+    int *temp;
+
+    temp = head;
+    while ((int)temp != 0) {
+        if (*(temp + 1) == index) {
+            return temp;
+        }
+        temp = (int*)*temp;
+    }
+    return (int*)0;
+}
+
+int* get_first_freelist(){
+	return remove(*(head+1));	
+}
+
+////////////////////////////////////////////////////////////////////////////
+
 
 //initialize head and tail
 //@return: initialized list
@@ -5027,7 +5127,7 @@ void initFreeList(){
 	int *curr;
 	int counter;
 	int max;
-	max = memorySize/pageSize;
+	max = memorySize/pageSize; // max number of free pages
 	counter = 0;
 	curr = memory;
 	while(counter < max){
@@ -5037,29 +5137,49 @@ void initFreeList(){
 			*curr = (int)curr + pageSize;
 			curr = (int*)*curr;
 		}
+		//print(itoa(*(curr), string_buffer, 10,0, 0)); println();
 		counter = counter + 1;
 	}
 	
 }
 
+
+
+
+//int* pmalloc(){
+//	int *nextPage;
+//	if(pFreeList == (int*)0){
+//		exception_handler(EXCEPTION_MEMORYOUTOFBOUNDS);
+//	} else {
+//		nextPage = (int*)*pFreeList;
+//		if(*pFreeList == 0){
+//			pFreeList = (int*)0;
+//		} else {
+//			pFreeList = (int*)*pFreeList;
+//		}
+//	}
+//	return nextPage;
+//}
+
 int* pmalloc(){
 	int *nextPage;
-	if(pFreeList == (int*)0){
+	if(head == (int*)0){
 		exception_handler(EXCEPTION_MEMORYOUTOFBOUNDS);
 	} else {
-		nextPage = (int*)*pFreeList;
-		if(*pFreeList == 0){
-			pFreeList = (int*)0;
-		} else {
-			pFreeList = (int*)*pFreeList;
-		}
+		nextPage = get_first_freelist();
+		//nextPage = malloc(4*pageSize);
 	}
 	return nextPage;
 }
 
+
+//void pfree(int *page){
+	//*page = (int)pFreeList;
+	//pFreeList = page;
+//}
+
 void pfree(int *page){
-	*page = (int)pFreeList;
-	pFreeList = page;
+	insert_in_freelist(*(page+1), *(page+2),0);
 }
 
 
