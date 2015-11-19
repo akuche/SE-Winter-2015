@@ -1,3 +1,4 @@
+
 // Copyright (c) 2015, the Selfie Project authors. All rights reserved.
 // Please see the AUTHORS file for details. Use of this source code is
 // governed by a BSD license that can be found in the LICENSE file.
@@ -16,7 +17,7 @@
 // resolve self-reference in systems code which is seen as the key
 // challenge when teaching systems engineering, hence the name.
 //
-// Selfie is a fully self-referential 4k-line C implementation of:
+// Selfie is a fully self-referential 5k-line C implementation of:
 //
 // 1. a self-compiling compiler called cstarc that compiles
 //    a tiny but powerful subset of C called C Star (C*) to
@@ -26,9 +27,10 @@
 // 3. a tiny C* library called libcstar utilized by cstarc and mipster.
 //
 // Selfie is kept minimal for simplicity and implemented in a single file.
-// There is no linker, assembler, or debugger. However, there is minimal
+// There is neither a linker nor an assembler. However, there is a simple
+// profiler and disassembler and even a simple debugger as well as minimal
 // operating system support in the form of MIPS32 o32 system calls built
-// into the emulator. Selfie is meant to be extended in numerous ways.
+// into the emulator.
 //
 // C* is a tiny Turing-complete subset of C that includes dereferencing
 // (the * operator) but excludes data structures, bitwise and Boolean
@@ -86,7 +88,9 @@ void stringReverse(int *s);
 int  stringCompare(int *s, int *t);
 
 int  atoi(int *s);
-int* itoa(int n, int *s, int b, int a);
+int* itoa(int n, int *s, int b, int a, int p);
+
+void putCharacter(int character);
 
 void print(int *s);
 void println();
@@ -129,7 +133,23 @@ int *power_of_two_table;
 int INT_MAX; // maximum numerical value of an integer
 int INT_MIN; // minimum numerical value of an integer
 
-int *string_buffer;
+int *character_buffer; // buffer for reading and writing characters
+int *string_buffer;    // buffer for string output
+int *io_buffer;        // buffer for binary I/O
+
+// 0 = O_RDONLY (0x0000)
+int O_RDONLY = 0;
+
+// 577 = 0x0241 = O_CREAT (0x0040) | O_WRONLY (0x0001) | O_TRUNC (0x0200)
+int O_CREAT_WRONLY_TRUNC = 577; // flags for opening write-only files
+
+// 420 = 00644 = S_IRUSR (00400) | S_IWUSR (00200) | S_IRGRP (00040) | S_IROTH (00004)
+int S_IRUSR_IWUSR_IRGRP_IROTH = 420; // flags for rw-r--r-- file permissions
+
+// ------------------------ GLOBAL VARIABLES -----------------------
+
+int *outputName = (int*) 0;
+int outputFD    = 1;
 
 // ------------------------- INITIALIZATION ------------------------
 
@@ -152,8 +172,12 @@ void initLibrary() {
     INT_MAX = (twoToThePowerOf(30) - 1) * 2 + 1;
     INT_MIN = -INT_MAX - 1;
 
-    // accommodate 32-bit numbers for itoa
+    character_buffer = malloc(1);
+
+    // accommodate at least 32-bit numbers for itoa
     string_buffer = malloc(33);
+
+    io_buffer = malloc(4);
 }
 
 // *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~
@@ -222,8 +246,6 @@ int SYM_STRING       = 27; // string
 
 int *SYMBOLS; // array of strings representing symbols
 
-int *character_buffer; // buffer for reading characters
-
 int maxIdentifierLength = 64; // maximum number of characters in an identifier
 int maxIntegerLength    = 10; // maximum number of characters in an integer
 int maxStringLength     = 128; // maximum number of characters in a string
@@ -247,7 +269,7 @@ int character; // most recently read character
 int symbol;    // most recently recognized symbol
 
 int *sourceName = (int*) 0; // name of source file
-int sourceFD    = 0;        // file descriptor of source file
+int sourceFD    = 0;        // file descriptor of open source file
 
 // ------------------------- INITIALIZATION ------------------------
 
@@ -282,8 +304,6 @@ void initScanner () {
     *(SYMBOLS + SYM_MOD)          = (int) "%";
     *(SYMBOLS + SYM_CHARACTER)    = (int) "character";
     *(SYMBOLS + SYM_STRING)       = (int) "string";
-
-    character_buffer = malloc(1);
 
     character = CHAR_EOF;
     symbol    = SYM_EOF;
@@ -414,7 +434,7 @@ void emitLeftShiftBy(int b);
 void emitMainEntry();
 
 // -----------------------------------------------------------------
-// ----------------------------- MAIN ------------------------------
+// --------------------------- COMPILER ----------------------------
 // -----------------------------------------------------------------
 
 void compile();
@@ -619,23 +639,112 @@ int  memoryStartAddress;// address where memory is allocated
 int *blockedQueue;		// blocked processes, wait for unlock
 int *readyQueue;		// ready processes
 int *zombieQueue;		// processes that are childs but parent is not waiting yet
-int *waitingQueue;		// parentProcesses waiting for child processes to terminate
 
 int *currProcess;		// currently operating process 
 
 int *segmentationTable;	// pointer to segmentation table
 int *currSegment;		// 
 
-int isEmulating=0;		// needed for range checks
+int isEmulating = 0;	// needed for range checks
 
 int lock = 0;			// if 1 lock is hold by a process
 int lockID = 0;			// id of process holding the lock
 int lockCounter = 0;
 
-int nextValidPID=0;		// unique id for next process
-int maxNrProcesses=5;	// maximum number of processes;
+int nextValidPID = 0;	// unique id for next process
+int maxNrProcesses = 5;	// maximum number of processes;
+
+int counterInstr = 0;	// currently processed instruction counter
+int maxInstr = 500;		// syscall_yield should be invoked every 'maxInstr'
+
+
+int* init_page_table();		// pagetable
+int page_index;		// index of pagination
+//int* create_page();			// create an empty page
+int* create_page(int va);	// create a page for a given virtual address
+void set_virtual_address(int va, int* page);	
+void set_physical_address(int va,int* page);
+void set_status(int s, int* page);
+int get_virtual_address(int* page);
+int get_physical_address(int* page);
+int get_status(int* page);
+
+int* init_page_table();	// create the pagetable
+int lookup(int va);		//
+int* return_page(int addr);
+void insertPageEntry(int addr);
+void removePage(int addr);
+int get_page_index();
+int* mappedPage(int va, int* pa);
+
+int mapping;
 
 // ---------------------    methods   ---------------------
+
+////////////////////////////////////////////////////////////////////////////////
+int* init_page_table(){
+	page_index = 0;	
+}
+
+init_free_list(){
+	
+}
+
+int* create_page(int va){
+	int* page;				// pageframe
+	int virtual_address;	// virtual address
+	int physical_address;	//physical address
+	int status;				// status of the pageframe
+	
+	page = malloc(6*4); // position 0 and 1 are reserved for prev and next in the list
+	*(page+2) =  get_page_index;
+	*(page + 3) = va;
+	*(page + 4) = -1;
+	*(page + 5) = 0;	
+	return page;
+}
+
+void set_virtual_address(int va,int* page){
+	*(page + 3) = va;
+}
+	
+void set_physical_address(int pa,int* page){
+	*(page + 4) = pa;
+}
+
+void set_status(int s, int* page){
+	*(page + 5) = s;
+}
+
+int get_virtual_address(int* page){
+	return *(page + 3);
+}
+
+int get_physical_address(int* page){
+	return *(page + 4);
+}
+
+int get_status(int* page){
+	return *(page + 5);
+}
+
+int get_page_index(){
+	int index;
+	index = page_index;
+	page_index++;
+	return index;
+}
+
+int* mappedPage(int va, int* pa){
+	int* mapping;
+	mapping = malloc(4*4); // first two position for next and prev
+	*(mapping + 2) = va;
+	*(mapping + 3) = (int)pa;
+	return mapping;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 
 // print methods
 void printList(int *list, int type, int verbose);
@@ -660,6 +769,8 @@ int* pollListHead(int *list);
 int* pollListTail(int *list);
 void sortList(int *list);
 void swap(int *curr, int *next, int *list);
+int  getListSize(int *list);
+int* getNextListElement(int *process);
 
 // process operations
 int* createProcess();
@@ -667,18 +778,29 @@ int  getProcessID(int *process);
 void saveProcessState();
 void setProcessState();
 void switchProcess(int finished);
+void switchFromFinishedProcess();
+void switchFromUnfinishedProcess();
 int* getSegmentEntry(int *process);
 void setSegmentEntry(int *process, int *entry);
 int* getRegisters(int *process);
 int  getPC(int *process);
 
 int* duplicateProcess();
-void copyRegisters(int *childRegisters);
-void copyMemory(int *childMemoryStart, int *parentMemoryStart, int memorySize);
+void copyRegisters(int *copyTo, int *copyFrom);
+void copyMemory(int *copyTo, int *copyFrom, int memorySize);
 void setParentPID(int *process, int data);
 int  getParentPID(int *process);
 void setPC(int *process, int data);
 void setRegisters(int *process, int *registers);
+
+int  isProcessWaiting(int *process);
+void setProcessWaitingStatus(int *process);
+void unsetProcessWaitingStatus(int *process);
+
+int* createChild(int pid);
+int* getChildQueue(int *process);
+
+int* getNextWantedProcess(int pid, int *primaryQueue, int *secondaryQueue, int *tertiaryQueue);
 
 // segmentation table entry operations
 int* createSegmentationTableEntry(int pid, int segmentSize);
@@ -688,16 +810,20 @@ int  getMemorySegmentSize(int *segment);
 
 
 void continueExecuting();
+void releaseLock();
 
 
 
 
 // -----------------------------------------------------------------
 // ---------------------------- BINARY -----------------------------
+// ----------------------------- CODE ------------------------------
 // -----------------------------------------------------------------
 
 int  loadBinary(int addr);
 void storeBinary(int addr, int instruction);
+
+void storeInstruction(int addr, int instruction);
 
 void emitInstruction(int instruction);
 void emitRFormat(int opcode, int rs, int rt, int rd, int function);
@@ -721,9 +847,18 @@ int maxBinaryLength = 131072; // 128KB
 
 // ------------------------ GLOBAL VARIABLES -----------------------
 
-int *binary       = (int*) 0;
-int  binaryLength = 0;
-int *binaryName   = (int*) 0;
+int *binary = (int*) 0; // binary of emitted instructions
+
+int binaryLength = 0; // length of binary in bytes incl. globals & strings
+
+int codeLength = 0; // length of code portion of binary in bytes
+
+int *binaryName   = (int*) 0; // file name of binary
+
+int *sourceLineNumber = (int*) 0; // source line number per emitted instruction
+
+int *assemblyName = (int*) 0; // name of assembly file
+int assemblyFD    = 0;        // file descriptor of open assembly file
 
 // -----------------------------------------------------------------
 // --------------------------- SYSCALLS ----------------------------
@@ -771,7 +906,6 @@ int SYSCALL_READ    = 4003;
 int SYSCALL_WRITE   = 4004;
 int SYSCALL_OPEN    = 4005;
 int SYSCALL_MALLOC  = 5001;
-int SYSCALL_GETCHAR = 5002;
 int SYSCALL_YIELD   = 6000;
 int SYSCALL_LOCK	= 6001;
 int SYSCALL_UNLOCK	= 6002;
@@ -789,32 +923,34 @@ int SYSCALL_WAIT    = 6005;
 // ---------------------------- MEMORY -----------------------------
 // -----------------------------------------------------------------
 
-void initMemory(int megabytes);
+void initMemory(int bytes);
 
 int tlb(int vaddr);
 
 int  loadMemory(int vaddr);
 void storeMemory(int vaddr, int data);
 
+// ------------------------ GLOBAL CONSTANTS -----------------------
+
+int MEGABYTE = 1048576;
+
 // ------------------------ GLOBAL VARIABLES -----------------------
 
-int *memory;
-int  memorySize;
+int memorySize = 0; // size of memory in bytes
 
-int *binaryName;
-int  binaryLength;
+int *memory = (int*) 0; // mipster memory
 
 // ------------------------- INITIALIZATION ------------------------
 
-void initMemory(int megabytes) {
-    if (megabytes < 0)
-        megabytes = 64;
-    else if (megabytes > 1024)
-        megabytes = 1024;
+void initMemory(int bytes) {
+    if (bytes < 0)
+        memorySize = 64 * MEGABYTE;
+    else if (bytes > 1024 * MEGABYTE)
+        memorySize = 1024 * MEGABYTE;
+    else
+        memorySize = bytes;
 
-    memorySize = megabytes * 1024 * 1024;
     memory     = malloc(memorySize);
-    
     memoryStartAddress = (int)memory;
     memoryBumpPointer = (int)memory;
     usedMemorySize = 0;
@@ -833,7 +969,6 @@ void op_beq();
 void op_bne();
 void op_addiu();
 void fct_jr();
-void op_lui();
 void fct_mfhi();
 void fct_mflo();
 void fct_multu();
@@ -856,16 +991,9 @@ void printException(int enumber);
 
 void exception_handler(int enumber);
 
-void pre_debug();
-void post_debug();
-
 void fetch();
 void execute();
 void run();
-
-// -----------------------------------------------------------------
-// ----------------------------- MAIN ------------------------------
-// -----------------------------------------------------------------
 
 void up_push(int value);
 int  up_malloc(int size);
@@ -874,19 +1002,21 @@ void up_copyArguments(int argc, int *argv);
 
 void copyBinaryToMemory();
 
+int addressWithMaxCounter(int *counters, int max);
+int fixedPointRatio(int a, int b);
+
+int  printCounters(int total, int *counters, int max);
+void printProfile(int *message, int total, int *counters);
+
+void disassemble();
 void emulate(int argc, int *argv);
 
 // ------------------------ GLOBAL CONSTANTS -----------------------
-
-int debug_load = 0;
 
 int debug_read    = 0;
 int debug_write   = 0;
 int debug_open    = 0;
 int debug_malloc  = 0;
-
-int debug_registers   = 0;
-int debug_disassemble = 0;
 
 int EXCEPTION_SIGNAL             = 1;
 int EXCEPTION_ADDRESSERROR       = 2;
@@ -907,6 +1037,24 @@ int ir = 0; // instruction record
 
 int reg_hi = 0; // hi register for multiplication/division
 int reg_lo = 0; // lo register for multiplication/division
+
+int halt = 0; // flag for halting mipster
+
+int interpret = 0;
+
+int debug = 0;
+
+int calls            = 0;        // total number of executed procedure calls
+int *callsPerAddress = (int*) 0; // number of executed calls of each procedure
+
+int loops            = 0;        // total number of executed loop iterations
+int *loopsPerAddress = (int*) 0; // number of executed iterations of each loop
+
+int loads            = 0;        // total number of executed memory loads
+int *loadsPerAddress = (int*) 0; // number of executed loads per load operation
+
+int stores            = 0;        // total number of executed memory stores
+int *storesPerAddress = (int*) 0; // number of executed stores per store operation
 
 // ------------------------- INITIALIZATION ------------------------
 
@@ -929,7 +1077,22 @@ void resetInterpreter() {
 
     reg_hi = 0;
     reg_lo = 0;
+
+    if (interpret) {
+        calls           = 0;
+        callsPerAddress = malloc(maxBinaryLength);
+
+        loops           = 0;
+        loopsPerAddress = malloc(maxBinaryLength);
+
+        loads           = 0;
+        loadsPerAddress = malloc(maxBinaryLength);
+
+        stores           = 0;
+        storesPerAddress = malloc(maxBinaryLength);
+    }
 }
+
 // *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~
 // -----------------------------------------------------------------
 // ---------------------     L I B R A R Y     ---------------------
@@ -962,7 +1125,8 @@ int rightShift(int n, int b) {
     else if (n >= 0)
         return n / twoToThePowerOf(b);
     else
-        // works even if n == INT_MIN
+        // works even if n == INT_MIN:
+        // shift right n with msb reset and then restore msb
         return ((n + 1) + INT_MAX) / twoToThePowerOf(b) +
             (INT_MAX / twoToThePowerOf(b) + 1);
 }
@@ -1070,15 +1234,18 @@ int atoi(int *s) {
     return n;
 }
 
-int* itoa(int n, int *s, int b, int a) {
+int* itoa(int n, int *s, int b, int a, int p) {
     // assert: b in {2,4,8,10,16}
 
     int i;
     int sign;
+    int msb;
 
     i = 0;
 
     sign = 0;
+
+    msb = 0;
 
     if (n == 0) {
         storeCharacter(s, 0, '0');
@@ -1092,8 +1259,9 @@ int* itoa(int n, int *s, int b, int a) {
                 // rightmost decimal digit of 32-bit INT_MIN
                 storeCharacter(s, 0, '8');
 
+                // avoids overflow
                 n = -(n / 10);
-                i = i + 1;
+                i = 1;
             } else
                 n = -n;
         } else {
@@ -1101,14 +1269,28 @@ int* itoa(int n, int *s, int b, int a) {
                 // rightmost non-decimal digit of INT_MIN
                 storeCharacter(s, 0, '0');
 
+                // avoids setting n to 0
                 n = (rightShift(INT_MIN, 1) / b) * 2;
-                i = i + 1;
-            } else
-                n = rightShift(leftShift(n, 1), 1);
+                i = 1;
+            } else {
+                // reset msb, restore below
+                n   = rightShift(leftShift(n, 1), 1);
+                msb = 1;
+            }
         }
+
+        // assert: n > 0
     }
 
     while (n != 0) {
+        if (p > 0)
+            if (i == p) {
+                storeCharacter(s, i, '.'); // set point of fixed point number
+
+                i = i + 1;
+                p = 0;
+            }
+
         if (n % b > 9)
             storeCharacter(s, i, n % b - 10 + 'A');
         else
@@ -1117,43 +1299,83 @@ int* itoa(int n, int *s, int b, int a) {
         n = n / b;
         i = i + 1;
 
-        if (i == 1) {
-            if (sign) {
-                if (b != 10)
-                    n = n + (rightShift(INT_MIN, 1) / b) * 2;
-            }
+        if (msb == 1) {
+            // restore msb from above
+            n   = n + (rightShift(INT_MIN, 1) / b) * 2;
+            msb = 0;
         }
     }
 
-    if (b != 10) {
+    if (p > 0) {
+        while (i < p) {
+            storeCharacter(s, i, '0'); // no point yet, fill with 0s
+
+            i = i + 1;
+        }
+
+        storeCharacter(s, i, '.');     // set point
+        storeCharacter(s, i + 1, '0'); // leading 0
+
+        i = i + 2;
+        p = 0;
+    }
+
+    if (b == 10) {
+        if (sign) {
+            storeCharacter(s, i, '-'); // negative decimal numbers start with -
+
+            i = i + 1;
+        }
+
         while (i < a) {
-            storeCharacter(s, i, '0'); // align with zeros
+            storeCharacter(s, i, ' '); // align with spaces
+
+            i = i + 1;
+        }
+    } else {
+        while (i < a) {
+            storeCharacter(s, i, '0'); // align with 0s
 
             i = i + 1;
         }
 
         if (b == 8) {
-            storeCharacter(s, i, '0');
+            storeCharacter(s, i, '0');     // octal numbers start with 00
             storeCharacter(s, i + 1, '0');
 
             i = i + 2;
         } else if (b == 16) {
-            storeCharacter(s, i, 'x');
+            storeCharacter(s, i, 'x');     // hexadecimal numbers start with 0x
             storeCharacter(s, i + 1, '0');
 
             i = i + 2;
         }
-    } else if (sign) {
-        storeCharacter(s, i, '-');
-
-        i = i + 1;
     }
-
+    
     storeCharacter(s, i, 0); // null terminated string
 
     stringReverse(s);
 
     return s;
+}
+
+void putCharacter(int character) {
+    if (outputFD == 1)
+        putchar(character);
+    else {
+        *character_buffer = character;
+
+        if (write(outputFD, character_buffer, 1) != 1) {
+            outputFD = 1;
+
+            print(selfieName);
+            print((int*) ": could not write character to output file ");
+            print(outputName);
+            println();
+
+            exit(-1);
+        }
+    }
 }
 
 void print(int *s) {
@@ -1162,18 +1384,18 @@ void print(int *s) {
     i = 0;
 
     while (loadCharacter(s, i) != 0) {
-        putchar(loadCharacter(s, i));
+        putCharacter(loadCharacter(s, i));
 
         i = i + 1;
     }
 }
 
 void println() {
-    putchar(CHAR_LF);
+    putCharacter(CHAR_LF);
 }
 
 void printCharacter(int character) {
-    putchar(CHAR_SINGLEQUOTE);
+    putCharacter(CHAR_SINGLEQUOTE);
 
     if (character == CHAR_EOF)
         print((int*) "end of file");
@@ -1184,17 +1406,17 @@ void printCharacter(int character) {
     else if (character == CHAR_CR)
         print((int*) "carriage return");
     else
-        putchar(character);
+        putCharacter(character);
 
-    putchar(CHAR_SINGLEQUOTE);
+    putCharacter(CHAR_SINGLEQUOTE);
 }
 
 void printString(int *s) {
-    putchar(CHAR_DOUBLEQUOTE);
+    putCharacter(CHAR_DOUBLEQUOTE);
 
     print(s);
     
-    putchar(CHAR_DOUBLEQUOTE);
+    putCharacter(CHAR_DOUBLEQUOTE);
 }
 
 // *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~
@@ -1208,14 +1430,14 @@ void printString(int *s) {
 // -----------------------------------------------------------------
 
 void printSymbol(int symbol) {
-    putchar(CHAR_DOUBLEQUOTE);
+    putCharacter(CHAR_DOUBLEQUOTE);
 
     if (symbol == SYM_EOF)
         print((int*) "end of file");
     else
         print((int*) *(SYMBOLS + symbol));
 
-    putchar(CHAR_DOUBLEQUOTE);
+    putCharacter(CHAR_DOUBLEQUOTE);
 }
 
 void printLineNumber(int* message) {
@@ -1225,7 +1447,7 @@ void printLineNumber(int* message) {
     print((int*) " in ");
     print(sourceName);
     print((int*) " in line ");
-    print(itoa(lineNumber, string_buffer, 10, 0));
+    print(itoa(lineNumber, string_buffer, 10, 0, 0));
     print((int*) ": ");
 }
 
@@ -1911,6 +2133,7 @@ void tfree(int numberOfTemporaries) {
 
 void save_temporaries() {
     while (allocatedTemporaries > 0) {
+        // push temporary onto stack
         emitIFormat(OP_ADDIU, REG_SP, REG_SP, -4);
         emitIFormat(OP_SW, REG_SP, currentTemporary(), 0);
 
@@ -1922,6 +2145,7 @@ void restore_temporaries(int numberOfTemporaries) {
     while (allocatedTemporaries < numberOfTemporaries) {
         talloc();
 
+        // restore temporary from stack
         emitIFormat(OP_LW, REG_SP, currentTemporary(), 0);
         emitIFormat(OP_ADDIU, REG_SP, REG_SP, 4);
     }
@@ -2621,7 +2845,7 @@ void gr_while() {
         syntaxErrorSymbol(SYM_WHILE);
 
     // unconditional branch to beginning of while
-    emitIFormat(OP_BEQ, 0, 0, (brBackToWhile - binaryLength - 4) / 4);
+    emitIFormat(OP_BEQ, REG_ZR, REG_ZR, (brBackToWhile - binaryLength - 4) / 4);
 
     if (brForwardToEnd != 0)
         // first instruction after loop comes here
@@ -2681,7 +2905,7 @@ void gr_if() {
 
                     // if the "if" case was true, we jump to the end
                     brForwardToEnd = binaryLength;
-                    emitIFormat(OP_BEQ, 0, 0, 0);
+                    emitIFormat(OP_BEQ, REG_ZR, REG_ZR, 0);
 
                     // if the "if" case was not true, we jump here
                     fixup_relative(brForwardToElseOrEnd);
@@ -3219,18 +3443,23 @@ void emitLeftShiftBy(int b) {
 }
 
 void emitMainEntry() {
-    // instruction at address zero cannot be fixed up
+    // instruction at address zero cannot be fixed up, so just put a NOP there
     emitRFormat(OP_SPECIAL, 0, 0, 0, FCT_NOP);
 
     createSymbolTableEntry(GLOBAL_TABLE, (int*) "main", binaryLength, FUNCTION, INT_T, 0);
 
     mainJumpAddress = binaryLength;
 
+    // jump and link to main, will return here only if there is no exit call
     emitJFormat(OP_JAL, 0);
+
+    // we exit cleanly with error code 0 pushed onto the stack
+    emitIFormat(OP_ADDIU, REG_SP, REG_SP, -4);
+    emitIFormat(OP_SW, REG_SP, REG_ZR, 0);
 }
 
 // -----------------------------------------------------------------
-// ----------------------------- MAIN ------------------------------
+// --------------------------- COMPILER ----------------------------
 // -----------------------------------------------------------------
 
 void compile() {
@@ -3239,7 +3468,7 @@ void compile() {
     print(sourceName);
     println();
 
-    sourceFD = open(sourceName, 0, 0); // 0 = O_RDONLY
+    sourceFD = open(sourceName, O_RDONLY, 0);
 
     if (sourceFD < 0) {
         print(selfieName);
@@ -3259,6 +3488,12 @@ void compile() {
     // allocate space for storing binary
     binary       = malloc(maxBinaryLength);
     binaryLength = 0;
+
+    // reset code length
+    codeLength = 0;
+
+    // allocate space for storing source code line numbers
+    sourceLineNumber = malloc(maxBinaryLength);
 
     // jump to main
     emitMainEntry();
@@ -3281,6 +3516,9 @@ void compile() {
 
     // parser
     gr_cstar();
+
+    // set code length
+    codeLength = binaryLength;
 
     // emit global variables and strings
     emitGlobalsStrings();
@@ -3471,44 +3709,22 @@ void decodeJFormat() {
 }
 
 // -----------------------------------------------------------------
-// ---------------------------- BINARY -----------------------------
+// ----------------------------- CODE ------------------------------
 // -----------------------------------------------------------------
 
 int loadBinary(int addr) {
 
     return *(binary + addr / 4);
 }
-int tlb(int vaddr) {
-	int addr;
-    if (vaddr % 4 != 0)
-        exception_handler(EXCEPTION_ADDRESSERROR);
-	addr = vaddr/4;
-	if(isEmulating){
-		if(memoryStartAddress > ((int)memory + addr)){ // addressed memory is below memory start address
-  			print((int*)"tlb first: ");exception_handler(EXCEPTION_SEGMENTATIONFAULT);
-		}
-		if(memoryStartAddress + memorySize < ((int)memory + addr)){ // addressed memory is greater than memory
-			print((int*)"tlb second: ");exception_handler(EXCEPTION_SEGMENTATIONFAULT);
-		}
-		if(*(currSegment+4) < addr){
-	        print((int*)"tlb third: ");exception_handler(EXCEPTION_HEAPOVERFLOW);
-		}
-		if(addr < 0){
-	       print((int*)"tlb fourth: "); exception_handler(EXCEPTION_ADDRESSERROR);
-		}
-	}
-
-    // physical memory is word-addressed for lack of byte-sized data type
-    return addr;
-}
-
-int loadMemory(int vaddr) {
-	
-    return *(memory + tlb(vaddr));
-}
 
 void storeBinary(int addr, int instruction) {
     *(binary + addr / 4) = instruction;
+}
+
+void storeInstruction(int addr, int instruction) {
+    *(sourceLineNumber + addr / 4) = lineNumber;
+
+    storeBinary(addr, instruction);
 }
 
 void emitInstruction(int instruction) {
@@ -3516,7 +3732,7 @@ void emitInstruction(int instruction) {
         syntaxErrorMessage((int*) "exceeded maximum binary length");
         exit(-1);
     } else {
-        storeBinary(binaryLength, instruction);
+        storeInstruction(binaryLength, instruction);
         
         binaryLength = binaryLength + 4;
     }
@@ -3591,6 +3807,7 @@ int copyStringToBinary(int *s, int a) {
     w = a + l;
 
     if (l % 4 != 0)
+        // making sure w is a multiple of 4 bytes
         w = w + 4 - l % 4;
 
     while (a < w) {
@@ -3629,10 +3846,8 @@ void emitGlobalsStrings() {
 
 void emit() {
     int fd;
-
-    // 1537 = 0x0601 = O_CREAT (0x0200) | O_WRONLY (0x0001) | O_TRUNC (0x0400)
-    // 420 = 00644 = S_IRUSR (00400) | S_IWUSR (00200) | S_IRGRP (00040) | S_IROTH (00004)
-    fd = open(binaryName, 1537, 420);
+    
+    fd = open(binaryName, O_CREAT_WRONLY_TRUNC, S_IRUSR_IWUSR_IRGRP_IROTH);
 
     if (fd < 0) {
         print(selfieName);
@@ -3648,6 +3863,12 @@ void emit() {
     print(binaryName);
     println();
 
+    *io_buffer = codeLength;
+
+    // first write code length
+    write(fd, io_buffer, 4);
+
+    // then write binary
     write(fd, binary, binaryLength);
 }
 
@@ -3655,7 +3876,7 @@ void load() {
     int fd;
     int numberOfReadBytes;
 
-    fd = open(binaryName, 0, 0); // 0 = O_RDONLY
+    fd = open(binaryName, O_RDONLY, 0);
 
     if (fd < 0) {
         print(selfieName);
@@ -3669,28 +3890,37 @@ void load() {
     binary       = malloc(maxBinaryLength);
     binaryLength = 0;
 
-    numberOfReadBytes = 4;
+    codeLength = 0;
+
+    sourceLineNumber = (int*) 0;
 
     print(selfieName);
     print((int*) ": loading code from input file ");
     print(binaryName);
     println();
 
-    while (numberOfReadBytes == 4) {
-        numberOfReadBytes = read(fd, binary + binaryLength / 4, 4);
+    // read code length first
+    numberOfReadBytes = read(fd, io_buffer, 4);
 
-        if (debug_load) {
-            print(binaryName);
-            print((int*) ": ");
-            print(itoa(binaryLength, string_buffer, 16, 8));
-            print((int*) ": ");
-            print(itoa(loadBinary(binaryLength), string_buffer, 16, 8));
-            println();
+    if (numberOfReadBytes == 4) {
+        codeLength = *io_buffer;
+        
+        // now read binary
+        numberOfReadBytes = read(fd, binary, maxBinaryLength);
+
+        if (numberOfReadBytes > 0) {
+            binaryLength = numberOfReadBytes;
+
+            return;
         }
-
-        if (numberOfReadBytes == 4)
-            binaryLength = binaryLength + 4;
     }
+
+    print(selfieName);
+    print((int*) ": failed to load code from input file ");
+    print(binaryName);
+    println();
+
+    exit(-1);
 }
 
 // -----------------------------------------------------------------
@@ -3704,26 +3934,43 @@ void emitExit() {
     emitIFormat(OP_ADDIU, REG_ZR, REG_A2, 0);
     emitIFormat(OP_ADDIU, REG_ZR, REG_A1, 0);
 
+    // load argument for exit
     emitIFormat(OP_LW, REG_SP, REG_A0, 0); // exit code
+
+    // remove the argument from the stack
     emitIFormat(OP_ADDIU, REG_SP, REG_SP, 4);
 
+    // load the correct syscall number and invoke syscall
     emitIFormat(OP_ADDIU, REG_ZR, REG_V0, SYSCALL_EXIT);
     emitRFormat(0, 0, 0, 0, FCT_SYSCALL);
+
+    // never returns here
 }
 
 void syscall_exit() {
     int exitCode;
 
     exitCode = *(registers+REG_A0);
-
     *(registers+REG_V0) = exitCode;
-	println();
-    print(binaryName);
-    print((int*) ": exiting with error code ");
-    print(itoa(exitCode, string_buffer, 10, 0));
-    println();
 
-    exit(0);
+	syscall_unlock();
+
+	print((int*)"process with id [");
+	print(itoa(getProcessID(currProcess), string_buffer, 10,0, 0));
+   	print((int*)"] terminates");println();
+
+	if(getParentPID(currProcess) > -1){
+		counterInstr = 0;
+		switchProcess(1);
+	} else {
+		print(binaryName);
+		print((int*) ": exiting with error code ");
+		print(itoa(exitCode, string_buffer, 10, 0, 0));
+		println();
+
+		halt = 1;
+	}
+			
 }
 
 void emitRead() {
@@ -3743,6 +3990,7 @@ void emitRead() {
     emitIFormat(OP_ADDIU, REG_ZR, REG_V0, SYSCALL_READ);
     emitRFormat(OP_SPECIAL, 0, 0, 0, FCT_SYSCALL);
 
+    // jump back to caller, return value is in REG_V0
     emitRFormat(OP_SPECIAL, REG_RA, 0, 0, FCT_JR);
 }
 
@@ -3766,11 +4014,11 @@ void syscall_read() {
     if (debug_read) {
         print(binaryName);
         print((int*) ": read ");
-        print(itoa(size, string_buffer, 10, 0));
+        print(itoa(size, string_buffer, 10, 0, 0));
         print((int*) " bytes from file with descriptor ");
-        print(itoa(fd, string_buffer, 10, 0));
+        print(itoa(fd, string_buffer, 10, 0, 0));
         print((int*) " into buffer at address ");
-        print(itoa((int) buffer, string_buffer, 16, 8));
+        print(itoa((int) buffer, string_buffer, 16, 8, 0));
         println();
     }
 }
@@ -3800,7 +4048,7 @@ void syscall_write() {
     int vaddr;
     int fd;
     int *buffer;
- //   syscall_lock();
+//    syscall_lock();
 	size  = *(registers+REG_A2);
 	vaddr = *(registers+REG_A1);
 	fd    = *(registers+REG_A0);
@@ -3811,16 +4059,17 @@ void syscall_write() {
 
 	*(registers+REG_V0) = size;
 
-	if (debug_write) {
-		print(binaryName);
-		print((int*) ": wrote ");
-		print(itoa(size, string_buffer, 10, 0));
-		print((int*) " bytes from buffer at address ");
-		print(itoa((int) buffer, string_buffer, 16, 8));
-		print((int*) " into file with descriptor ");
-		print(itoa(fd, string_buffer, 10, 0));
-		println();
-	}
+	
+    if (debug_write) {
+        print(binaryName);
+        print((int*) ": wrote ");
+        print(itoa(size, string_buffer, 10, 0, 0));
+        print((int*) " bytes from buffer at address ");
+        print(itoa((int) buffer, string_buffer, 16, 8, 0));
+        print((int*) " into file with descriptor ");
+        print(itoa(fd, string_buffer, 10, 0, 0));
+        println();
+    }
 //	syscall_unlock();
 }
 
@@ -3829,7 +4078,7 @@ void emitOpen() {
 
     emitIFormat(OP_ADDIU, REG_ZR, REG_A3, 0);
 
-    emitIFormat(OP_ADDIU, REG_SP, REG_A2, 0); // mode
+    emitIFormat(OP_LW, REG_SP, REG_A2, 0); // mode
     emitIFormat(OP_ADDIU, REG_SP, REG_SP, 4);
 
     emitIFormat(OP_LW, REG_SP, REG_A1, 0); // flags
@@ -3866,11 +4115,11 @@ void syscall_open() {
         print((int*) ": opened file ");
         printString(filename);
         print((int*) " with flags ");
-        print(itoa(flags, string_buffer, 16, 0));
+        print(itoa(flags, string_buffer, 16, 0, 0));
         print((int*) " and mode ");
-        print(itoa(mode, string_buffer, 8, 0));
+        print(itoa(mode, string_buffer, 8, 0, 0));
         print((int*) " returning file descriptor ");
-        print(itoa(fd, string_buffer, 10, 0));
+        print(itoa(fd, string_buffer, 10, 0, 0));
         println();
     }
 }
@@ -3882,17 +4131,12 @@ void emitMalloc() {
     emitIFormat(OP_ADDIU, REG_ZR, REG_A2, 0);
     emitIFormat(OP_ADDIU, REG_ZR, REG_A1, 0);
 
-    // load argument for malloc (size)
     emitIFormat(OP_LW, REG_SP, REG_A0, 0);
-
-    // remove the argument from the stack
     emitIFormat(OP_ADDIU, REG_SP, REG_SP, 4);
 
-    // load the correct syscall number and invoke syscall
     emitIFormat(OP_ADDIU, REG_ZR, REG_V0, SYSCALL_MALLOC);
     emitRFormat(OP_SPECIAL, 0, 0, 0, FCT_SYSCALL);
 
-    // jump back to caller, return value is in REG_V0
     emitRFormat(OP_SPECIAL, REG_RA, 0, 0, FCT_JR);
 }
 
@@ -3916,9 +4160,9 @@ void syscall_malloc() {
     if (debug_malloc) {
         print(binaryName);
         print((int*) ": malloc ");
-        print(itoa(size, string_buffer, 10, 0));
+        print(itoa(size, string_buffer, 10, 0, 0));
         print((int*) " bytes returning address ");
-        print(itoa(bump, string_buffer, 16, 8));
+        print(itoa(bump, string_buffer, 16, 8, 0));
         println();
     }
 }
@@ -4056,8 +4300,8 @@ void syscall_fork(){
 		childRegisters = getRegisters(childProcess);
 		*(registers+REG_V0) = getProcessID(childProcess); //return value for parent is childID
 		*(childRegisters+REG_V0) = 0;	//return value for child is 0
-
 	}
+	saveProcessState();
 }
 
 void emitWait(){
@@ -4066,7 +4310,9 @@ void emitWait(){
     emitIFormat(OP_ADDIU, REG_ZR, REG_A3, 0);
     emitIFormat(OP_ADDIU, REG_ZR, REG_A2, 0);
     emitIFormat(OP_ADDIU, REG_ZR, REG_A1, 0);
-    emitIFormat(OP_ADDIU, REG_ZR, REG_A0, 0);
+
+    emitIFormat(OP_LW, REG_SP, REG_A0, 0);
+    emitIFormat(OP_ADDIU, REG_SP, REG_SP, 4);
 
     emitIFormat(OP_ADDIU, REG_ZR, REG_V0, SYSCALL_WAIT);
     emitRFormat(OP_SPECIAL, 0, 0, 0, FCT_SYSCALL);
@@ -4075,76 +4321,25 @@ void emitWait(){
 }
 
 void syscall_wait(){
-	// add to blocked queue
-	// only exit after child exits
-	
-}
+	int *child;
+	int *childListOfParent;
+	int waitForPID;
+	waitForPID = *(registers+REG_A0);
 
-int* duplicateProcess(){
-	int debug_fork;
-	int parentID;
-	int *parentSegEntry;
-	int parentMemorySize;
-	int *parentMemoryStart;
-	int childID;
-	int *childProcess;
-	int *childSegEntry;
-	int *childRegisters;
-	int *childMemoryStart;
-	debug_fork = 0;
-	
-	//get data of parent
-	parentID = getProcessID(currProcess);	
-	parentSegEntry = getSegmentEntry(currProcess);	
-	parentMemorySize = getMemorySegmentSize(parentSegEntry);
-	parentMemoryStart = getMemorySegmentStart(parentSegEntry);
+	if(waitForPID != getParentPID(currProcess)){
+		waitForPID = *(registers+REG_A0);
 
-	// create child process and segmentation table entry
-	childProcess = createProcess();
-	childSegEntry = createSegmentationTableEntry(getProcessID(childProcess), parentMemorySize);
-	appendListElement(currSegment, segmentationTable);
-
-	// get data of child
-	childMemoryStart = getMemorySegmentStart(childSegEntry);
-	
-	// set data of child
-	setParentPID(childProcess, parentID);
-	setSegmentEntry(childProcess, childSegEntry);
-	setPC(childProcess, pc+4);
-
-	childRegisters = getRegisters(childProcess);
-	childID = getProcessID(childProcess);
-
-	copyRegisters(childRegisters);
-	copyMemory(childMemoryStart, parentMemoryStart, parentMemorySize);
-	appendListElement(childProcess, readyQueue);
-	
-	if(debug_fork){
-		print((int*)"process with id ");
-		print(itoa(parentID, string_buffer, 10, 0));
-		print((int*)" is parent of process with id ");
-		print(itoa(childID, string_buffer, 10, 0)); println();
-	}
-	return childProcess;
-}
-
-void copyRegisters(int *childRegisters){
-	int i;
-	i = 0;
-	while(i < 32){
-		*(childRegisters+i) = *(registers+i);
-		i = i+1;
+		childListOfParent = getChildQueue(currProcess);
+		child = createChild(waitForPID);
+		if(child != (int*)0){ // if child == (int*)0 then no process with PID 'waitForPID' exists
+			appendListElement(child, childListOfParent);
+			releaseLock();
+			setProcessWaitingStatus(currProcess);
+			switchProcess(0);
+		}
 	}
 }
 
-void copyMemory(int *childMemoryStart, int *parentMemoryStart, int memorySize){
-	int i;
-	i = 0;
-	while(i < memorySize){
-		*(childMemoryStart+i) = *(parentMemoryStart+i);
-		i = i+1;
-	}
-}
 
 // *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~
 // -----------------------------------------------------------------
@@ -4167,8 +4362,13 @@ void copyMemory(int *childMemoryStart, int *parentMemoryStart, int memorySize){
 // 5 +-----+  
 //   |mem  | pointer to  entry in segmentation table
 // 6 +-----+ 
-//   |PPID | parent process ID
+//  |child | pointer on the list of childProcess
 // 7 +-----+ 
+// |status | status isWaiting:
+// 8 +-----+ 
+//   | 	   | 
+// 9 +-----+ 
+
 
 // print segmentation table entry
 void printSegmentationTableEntryVerbose(int *element){
@@ -4179,27 +4379,27 @@ void printSegmentationTableEntryVerbose(int *element){
 
 	print((int*)"pre ");
 	if(prev != (int*)0)
-		print(itoa(getProcessID(prev), string_buffer, 10, 0));
+		print(itoa(getProcessID(prev), string_buffer, 10, 0, 0));
 	println();
 
 	print((int*)"pid ");
 	if(element != (int*)0)
-		print(itoa(getProcessID(element), string_buffer, 10, 0));
+		print(itoa(getProcessID(element), string_buffer, 10, 0, 0));
 	println();
 
 	print((int*)"next ");
 	if(next != (int*)0)
-		print(itoa(getProcessID(next), string_buffer, 10, 0));
+		print(itoa(getProcessID(next), string_buffer, 10, 0, 0));
 	println();
 
 	print((int*)"segPos ");
 	if(element != (int*)0)
-		print(itoa(*(element+3), string_buffer, 10, 0));
+		print(itoa(*(element+3), string_buffer, 10, 0, 0));
 	println();
 
 	print((int*)"segSize ");
 	if(element != (int*)0)
-		print(itoa(*(element+4), string_buffer, 10, 0));
+		print(itoa(*(element+4), string_buffer, 10, 0, 0));
 	println();
 
 }
@@ -4208,25 +4408,34 @@ void printSegmentationTableEntry(int *element){
 if(0){
 	print((int*)"owning pid ");
 	if(element != (int*)0)
-		print(itoa(getProcessID(element), string_buffer, 10, 0));
+		print(itoa(getProcessID(element), string_buffer, 10, 0, 0));
 	println();
 	}
 	print((int*)"segPos ");
 	if(element != (int*)0)
-		print(itoa(*(element+3), string_buffer, 10, 0));
+		print(itoa(*(element+3), string_buffer, 10, 0, 0));
 	println();
 
 	print((int*)"segSize ");
 	if(element != (int*)0)
-		print(itoa(*(element+4), string_buffer, 10, 0));
+		print(itoa(*(element+4), string_buffer, 10, 0, 0));
 	println();
 }
 
 void printProcess(int *element){
 	print((int*)"pid ");
 	if(element != (int*)0)
-		print(itoa(getProcessID(element), string_buffer, 10, 0));
+		print(itoa(getProcessID(element), string_buffer, 10, 0, 0));
 	println();
+	print((int*)"isWaiting ");
+	if(element != (int*)0)
+		print(itoa(isProcessWaiting(element), string_buffer, 10, 0, 0));
+	println();
+	print((int*)"counterchildren ");
+	if(element != (int*)0)
+		print(itoa(getListSize(getChildQueue(element)), string_buffer, 10, 0, 0));
+	println();
+	
 }
 
 void printProcessVerbose(int *element){
@@ -4239,22 +4448,22 @@ void printProcessVerbose(int *element){
 
 	print((int*)"pre ");
 	if(prev != (int*)0)
-		print(itoa(getProcessID(prev), string_buffer, 10, 0));
+		print(itoa(getProcessID(prev), string_buffer, 10, 0, 0));
 	println();
 
 	print((int*)"pid ");
 	if(element != (int*)0)
-		print(itoa(getProcessID(element), string_buffer, 10, 0));
+		print(itoa(getProcessID(element), string_buffer, 10, 0, 0));
 	println();
 
 	print((int*)"next ");
 	if(next != (int*)0)
-		print(itoa(getProcessID(next), string_buffer, 10, 0));
+		print(itoa(getProcessID(next), string_buffer, 10, 0, 0));
 	println();
 
 	print((int*)"pc ");
 	if(element != (int*)0)
-		print(itoa(getPC(element), string_buffer, 10, 0));
+		print(itoa(getPC(element), string_buffer, 10, 0, 0));
 	println();
 
 	printSegmentationTableEntry(segEntry);
@@ -4346,15 +4555,62 @@ int* createProcess(){
 	int pid;
 	pid = nextValidPID;
 	nextValidPID = nextValidPID+1;
-	newElement = malloc (7*4);
+	newElement = malloc (9*4);
 	*(newElement+0) = 0;	// prev
 	*(newElement+1) = 0;	// next
 	*(newElement+2) = pid;	// process ID
 	*(newElement+3) = 0;	// pc
 	*(newElement+4) = (int)malloc(32*4);	// registers
 	*(newElement+5) = 0; // pointer to entry in segmentation table
-	*(newElement+6) = 0; // parentID
+	*(newElement+6) = -1; // parentPID
+	*(newElement+7) = (int)initList(); // list for child processes
+	*(newElement+8) = 0; // status isWaiting: 1 if waiting, 0 otherwise
 	return newElement;
+}
+
+int isProcessWaiting(int *process){
+	return *(process+8);
+}
+
+void setProcessWaitingStatus(int *process){
+	*(process+8) = 1;
+}
+
+void unsetProcessWaitingStatus(int *process){
+	*(process+8) = 0;
+}
+
+// create child for childlist
+int* createChild(int pid){
+	int *child;
+	int *findProcess;
+	findProcess = getNextWantedProcess(pid, readyQueue, blockedQueue, zombieQueue);
+	if((int)findProcess != 0){ 
+		child = malloc(3*4);
+		*(child+0) = 0;	// prev
+		*(child+1) = 0;	// next
+	
+		*(child+2) = pid;	// process ID of child
+		return child;
+	}
+	return (int*)0;
+}
+
+int* getNextWantedProcess(int pid, int *primaryQueue, int *secondaryQueue, int *tertiaryQueue){
+	int *findProcess;
+	findProcess = findElementByPID(pid, primaryQueue);
+	
+	if((int)findProcess == 0){
+		findProcess = findElementByPID(pid, secondaryQueue);
+		if((int)findProcess == 0){
+			findProcess = findElementByPID(pid, tertiaryQueue);
+		}		
+	}
+	return findProcess;
+}
+
+int* getChildQueue(int *process){
+	return (int*)*(process+7);
 }
 
 //@return: pid of current process
@@ -4463,8 +4719,8 @@ void sortList(int *list){
 	pToHead = pollListHead(list);
 	pToTail = pollListTail(list);
 	
-	if(isListEmpty(list));	// list is empty, nothing to do 
-	else if(*pToHead == *pToTail);	// list contains only one element, nothing to do
+	if(isListEmpty(list)){}	// list is empty, nothing to do 
+	else if(*pToHead == *pToTail){}	// list contains only one element, nothing to do
 	else {	//otherwise
 		
 		while(unsorted){
@@ -4516,35 +4772,6 @@ void swap(int *curr, int *next, int *list){
 	*(curr+1) = (int)nextButOne;
 }
 
-void testSwap(){
-	int *list;
-	int *proc;
-	int *head;
-	int *tail;
-	list = initList();
-
-	proc = createProcess();
-	appendListElement(proc, list);
-	
-	proc = createProcess();
-	appendListElement(proc, list);
-
-	proc = createProcess();
-	appendListElement(proc, list);
-	
-	proc = createProcess();
-	appendListElement(proc, list);
-
-	proc = createProcess();
-	appendListElement(proc, list);
-	
-	proc = createProcess();
-	appendListElement(proc, list);
-	
-	sortList(list);
-	printProcessListVerbose(list);
-}
-
 // @return: list element with pid "pid"
 //			0 if not in list
 int* findElementByPID(int pid, int *list){
@@ -4567,6 +4794,14 @@ int* findElementByPID(int pid, int *list){
 		}
 	}
 	return (int*)0;
+}
+
+int listContainsElement(int pid, int *list){
+	int *el;
+	el = findElementByPID(pid, list);
+	if((int)el == 0)
+		return 0;
+	return 1;
 }
 
 // save pc and registers of current process
@@ -4638,90 +4873,293 @@ int getPC(int *process){
 	return *(process+3);
 }
 
-void switchProcess(int finished){ //finished = 1, not finished = 0
-	if(finished == 1){
-		lock = 0;
-		if(isListEmpty(blockedQueue)==0){
-			currProcess = removeFirst(blockedQueue);
-			syscall_lock();
-			setProcessState();
-		} else if (isListEmpty(readyQueue) == 0){
-			currProcess = removeFirst(readyQueue);
-			setProcessState();
-		} else {
-			continueExecuting();
-		}
-	} else if (finished == 0){
-		saveProcessState();
-		if(lock==1){
-			if(lockID != getProcessID(currProcess)){
-				appendListElement(currProcess, blockedQueue);
-			} else 
-				appendListElement(currProcess, readyQueue);
-		} else
-			appendListElement(currProcess, readyQueue);
+int getListSize(int *list){
+	int size;
+	int *pToHead;
+	int *currElement;
+	size = 0;
+	pToHead = pollListHead(list);
+	currElement = (int*)*pToHead;
 
-		if(lock == 0){
-			if(isListEmpty(blockedQueue)==0) {
-				currProcess = removeFirst(blockedQueue);
-				syscall_lock();
-				setProcessState();
-			} else {
-				currProcess = removeFirst(readyQueue);
-				setProcessState();
-			}
-		} else if (lock == 1) {
-			currProcess = removeFirst(readyQueue);
-			setProcessState();
-		}
+	while((int)currElement != 0){
+
+		size = size+1;
+		currElement = getNextListElement(currElement);
 	}
-if(0){	print((int*)"readyQueue");println();
-	printProcessList(readyQueue);
-	print((int*)"blockedQueue");println();
-	printProcessList(blockedQueue);
-	print((int*)"currentProcess");println();
-	printProcessVerbose(currProcess);}
+	return size;
 }
 
-void testDoubleLinkedList(){
-	int *list;
-	int *head;
-	int *newElement;
-	int *find;
-	print((int*)"testDoubleLinkedList");println();
-	list = initList();
-	segmentationTable = initList();
+int* getNextListElement(int *process){
+	return (int*)*(process+1);
+}
+
+int allChildrenTerminated1(int *process){
+	int *childrenList;
+	int *current;
+	int currentID;
+	int containsCurrent;
+	int *currentZombie;
 	
+	childrenList = getChildQueue(process);
+	if(isListEmpty(childrenList))
+		return 0;
+	current = (int*)*childrenList;
+	while((int)current != 0){
+		containsCurrent = 0;
+		currentID = getProcessID(current);
+		currentZombie = (int*)*zombieQueue;
+		while((int)currentZombie != 0){
+			if(currentID == getProcessID(currentZombie)){
+				containsCurrent = 1;
+			}
+		}
+		if(containsCurrent == 0)
+			return 0;
+	}
+	return 1;
+}
 
-	newElement = createProcess();
-	appendListElement(newElement, list);
-
-	// expected output: 0,65,0 	
-	printProcessList(list);
-
-	newElement = createProcess();
-	appendListElement(newElement, list);
-
-	// expected output: 0,65,66		65,66,0
-	printProcessList(list);
-
-	newElement = pollListHead(list);
-	removeFirst(list);
-
-	// expected output: 0,66,0 	
-	printProcessList(list);
+// @return: 1 if all children of process terminated 
+//			0 otherwise
+// children that are terminated are in the zombieQueue
+// if a child is in the zombieQueue it can be removed from the 
+// zombieQueue and the processes childQueue
+// the childQueue is only analyzed as long as the condition 'all children terminated' holds
+int allChildrenTerminated(int *process){
+	int *childQueue;
+	int childQueueSize;
+	int *currChild;
+	int *currZombie;
+	int zombieQueueSize;
+	int listContainsChild;
+	int i;
+	int j;
+	i=0;
+	listContainsChild=0;
+	childQueue = getChildQueue(process);
+	childQueueSize = getListSize(childQueue);
+	while(i < childQueueSize){	// check every child in the queue
+		currChild = removeFirst(childQueue);
+		zombieQueueSize = getListSize(zombieQueue);
+		j = 0;
+		while(j < zombieQueueSize){
+			currZombie = removeFirst(zombieQueue);
+			if(getProcessID(currChild) == getProcessID(currZombie)){
+				listContainsChild = 1;
+				j = zombieQueueSize; // for exiting while loop
+			} else { // if currZombie is not the zombie we are looking for it must be appended in the list again
+				appendListElement(currZombie, zombieQueue);
+			}
+			j = j+1;
+		}
+		if(listContainsChild == 0){ // if the current child is not in the zombie list
+			appendListElement(currChild, childQueue); // it has to be appended in the childQueue again
+			return 0;
+		}
+		i = i+1;
+	}
 	
-	removeFirst(list);
+	return 1;
+}
 
-	// expected output:  	
-	printProcessList(list);
-	
-	printProcess((int*)*newElement);
-	appendListElement((int*)*newElement, list);
+// wake up parent process, remove from blocked queue and add to readyQueue
+void notify(int *process){
+	int *findProcess;
+	int blockedListSize;
+	int i;
+	i = 0;
+	blockedListSize = getListSize(blockedQueue);
+	findProcess = removeFirst(blockedQueue);
+	// remove from blocked queue and add to readyQueue
+	while(i < blockedListSize){
+		if(findProcess != process){
+			appendListElement(findProcess, blockedQueue);
+			findProcess = removeFirst(blockedQueue);
+		} else {
+			i = blockedListSize;
+		}
+		i = i+1;
+	} 
+	if((int)findProcess != 0) {
+		unsetProcessWaitingStatus(process);
+		appendListElement(findProcess, readyQueue);
+	}
+}
 
-	// expected output: 0,66,0 	
-	printProcessList(list);
+void releaseLock(){
+	lock = 0;
+	lockCounter = 0;
+}
+
+//@return: first "not waiting" process in blockedQueue
+//			if such a process does not exist it returns the the first process from readyQueue
+int* getNextNotWaitingProcess(){
+	int *curr;
+	int blockedListSize;
+	int i;
+	i = 0;
+	blockedListSize = getListSize(blockedQueue);
+	curr = removeFirst(blockedQueue);
+	while(i < blockedListSize){
+		if(isProcessWaiting(curr)){ // process is waiting, get next
+			appendListElement(curr, blockedQueue);
+		} else {
+			return curr;
+		}
+		curr = removeFirst(blockedQueue);
+		
+		i = i+1;
+	}
+	if((int)curr != 0)
+		appendListElement(curr, blockedQueue);
+	// if all processes from blocked queue are waiting
+	return removeFirst(readyQueue);
+
+}
+
+void switchFromFinishedProcess(){
+	int *parentProcess;
+	saveProcessState();
+	if(allChildrenTerminated(currProcess)){// if process waits for child it is in his childList
+	// a child is in the childQueue of a process when the process invokes wait on the childrens PID
+	// has child(ren) and all terminated --> all children are in zombieQueue or counterChildren is 0
+		if(getParentPID(currProcess) == -1) {
+			// --> there is no parent
+			// --> currProcess can terminate
+			// all other processes can be killed because all other (probably existing) processes are children
+			// of this master parent but there was no wait(PID) call
+//			continueExecuting();
+			exit(0);
+		} else {
+			// this currProcess has a parent --> currProcess is added to the zombieQueue
+			// wake up parent process --> if all children terminated of parentProcess --> add to readyQueue
+			//							remove child, remove child from parents childList
+
+			print((int*) "add process with id [");
+	   		print(itoa(getProcessID(currProcess), string_buffer, 10,0, 0));
+		   	print((int*)"] to zombieList");println();
+			appendListElement(currProcess, zombieQueue);
+			
+			parentProcess = findElementByPID(getParentPID(currProcess), readyQueue);
+			if((int)parentProcess == 0){
+				parentProcess = findElementByPID(getParentPID(currProcess), blockedQueue);
+			}
+			if((int)parentProcess != 0){
+				if(allChildrenTerminated(parentProcess)){ // if this is the last child the parent process was waiting
+					notify(parentProcess);		  // for then the parentProcess can be woken up 
+				}
+			}
+			
+		}
+	} else {
+		// not implemented yet, occurs when a parentProcess does not invoke wait(PID) on his child's PID
+		// children of this process are alive
+		// 2 possibilities: 1. invoke wait
+		//					2. kill all children (recursively)
+		//continueExecuting();
+		exit(-1);
+	}
+	if(lock){
+		// getNextProcess: if lock is hold by currProcess
+		if(lockID == getProcessID(currProcess)){ // if lock is hold by currProcess --> releaseLock
+			releaseLock();
+			currProcess = getNextNotWaitingProcess();	// get next (not waiting) process from blockedQueue
+		} else {
+			currProcess = removeFirst(readyQueue);
+		}
+	} else {
+		currProcess = getNextNotWaitingProcess();	// get next (not waiting) process from blockedQueue
+	}
+}
+
+void switchFromUnfinishedProcess(){
+	saveProcessState();
+	if(lock){
+		if(counterInstr < maxInstr){
+			appendListElement(currProcess, readyQueue);
+		} else if(lockID != getProcessID(currProcess)){ // if lock is hold by another process, 
+			appendListElement(currProcess, blockedQueue);	// switchProcess is invoked from syscall_lock()
+		} else if(isProcessWaiting(currProcess)) {
+			appendListElement(currProcess, blockedQueue);	// switchProcess is invoked from syscall_wait()
+		} else {
+			appendListElement(currProcess, readyQueue);
+		}
+	// if it is a cooperative switch --> waiting status == 0,
+	//otherwise waiting status == 1 and switchProcess was invoked from syscall_wait()
+	} else if(isProcessWaiting(currProcess)) {
+		appendListElement(currProcess, blockedQueue);
+	} else { // lock is not hold, cooperative switch
+			appendListElement(currProcess, readyQueue);
+	}
+	// if lock is hold by any process --> get next process from readyQueue
+	//		--> if there 
+	// else -->get next process from blockedQueue
+	if(lock){
+		// get next from readyQueue
+		currProcess = removeFirst(readyQueue);
+	} else {
+		currProcess = getNextNotWaitingProcess();	// get next (not waiting) process from blockedQueue
+	}
+}
+
+void switchProcess(int finished){
+	if(finished){
+		switchFromFinishedProcess();
+	} else if (finished == 0) {
+		switchFromUnfinishedProcess();
+	}
+	if((int)currProcess == 0){	// if there is no such process something went wrong
+		exit(-1);				
+	} else {
+		setProcessState();
+	}
+}
+
+int* duplicateProcess(){
+	int *parentSegEntry;
+	int parentMemorySize;
+	int *childProcess;
+	int *childSegEntry;
 	
+	//get data of parent
+	parentSegEntry = getSegmentEntry(currProcess);	
+	parentMemorySize = getMemorySegmentSize(parentSegEntry);
+
+	// create child process and segmentation table entry
+	childProcess = createProcess();
+	childSegEntry = createSegmentationTableEntry(getProcessID(childProcess), parentMemorySize);
+	appendListElement(currSegment, segmentationTable);
+
+	// set data of child
+	setParentPID(childProcess, getProcessID(currProcess));
+	setSegmentEntry(childProcess, childSegEntry);
+	saveProcessState();
+	setPC(childProcess, *(registers+REG_RA));
+	copyRegisters(getRegisters(childProcess), registers);
+	copyMemory(getMemorySegmentStart(childSegEntry), getMemorySegmentStart(parentSegEntry), parentMemorySize);
+
+	// add to process list
+	appendListElement(childProcess, readyQueue);
+	
+	return childProcess;
+}
+
+void copyRegisters(int *copyTo, int *copyFrom){
+	int i;
+	i = 0;
+	while(i < 32){
+		*(copyTo+i) = *(copyFrom+i);
+		i = i+1;
+	}
+}
+
+void copyMemory(int *copyTo, int *copyFrom, int memorySize){
+	int i;
+	i = 0;
+	while(i < memorySize){
+		*(copyTo+i) = *(copyFrom+i);
+		i = i+1;
+	}
 }
 
 // *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~ *~*~
@@ -4733,10 +5171,46 @@ void testDoubleLinkedList(){
 // -----------------------------------------------------------------
 // ---------------------------- MEMORY -----------------------------
 // -----------------------------------------------------------------
+int tlb(int vaddr) {
+	int addr;
+    if (vaddr % 4 != 0)
+        exception_handler(EXCEPTION_ADDRESSERROR);
+	addr = vaddr/4;
+	if(isEmulating){
+		if(memoryStartAddress > ((int)memory + addr)){ // addressed memory is below memory start address
+  			print((int*)"tlb first: ");exception_handler(EXCEPTION_SEGMENTATIONFAULT);
+		}
+		if(memoryStartAddress + memorySize < ((int)memory + addr)){ // addressed memory is greater than memory
+			print((int*)"tlb second: ");exception_handler(EXCEPTION_SEGMENTATIONFAULT);
+		}
+//		if(nextValidPID != 0){
+//			if(*(currSegment+4) < addr){
+//			    print((int*)"tlb third: ");exception_handler(EXCEPTION_HEAPOVERFLOW);
+//			}
+//		}
+		if(addr < 0){
+	       print((int*)"tlb fourth: "); exception_handler(EXCEPTION_ADDRESSERROR);
+		}
+	}
 
+    // physical memory is word-addressed for lack of byte-sized data type
+    return addr;
+}
+
+int loadMemory(int vaddr) {
+    int paddr;
+
+    paddr = tlb(vaddr);
+
+    return *(memory + paddr);
+}
 
 void storeMemory(int vaddr, int data) {
-    *(memory + tlb(vaddr)) = data;
+    int paddr;
+
+    paddr = tlb(vaddr);
+
+    *(memory + paddr) = data;
 }
 
 // -----------------------------------------------------------------
@@ -4744,252 +5218,499 @@ void storeMemory(int vaddr, int data) {
 // -----------------------------------------------------------------
 
 void fct_syscall() {
-    if (debug_disassemble) {
+    if (debug) {
         printFunction(function);
         println();
     }
 
-    if (*(registers+REG_V0) == SYSCALL_EXIT) {
-        syscall_exit();
-    } else if (*(registers+REG_V0) == SYSCALL_READ) {
-        syscall_read();
-    } else if (*(registers+REG_V0) == SYSCALL_WRITE) {
-        syscall_write();
-    } else if (*(registers+REG_V0) == SYSCALL_OPEN) {
-        syscall_open();
-    } else if (*(registers+REG_V0) == SYSCALL_MALLOC) {
-        syscall_malloc();
-    } else if (*(registers+REG_V0) == SYSCALL_YIELD) {
-        syscall_yield();
-    } else if (*(registers+REG_V0) == SYSCALL_LOCK) {
-        syscall_lock();
-    } else if (*(registers+REG_V0) == SYSCALL_UNLOCK) {
-        syscall_unlock();
-    } else if(*(registers+REG_V0) == SYSCALL_GETPID){
-    	syscall_getPID();
-    } else if(*(registers+REG_V0) == SYSCALL_FORK){
-    	syscall_fork();
-    } else if(*(registers+REG_V0) == SYSCALL_WAIT){
-    	syscall_wait();
-    } else {
-        exception_handler(EXCEPTION_UNKNOWNSYSCALL);
-    }
+    if (interpret) {
+        if (*(registers+REG_V0) == SYSCALL_EXIT) {
+            syscall_exit();
+        } else if (*(registers+REG_V0) == SYSCALL_READ) {
+            syscall_read();
+        } else if (*(registers+REG_V0) == SYSCALL_WRITE) {
+            syscall_write();
+        } else if (*(registers+REG_V0) == SYSCALL_OPEN) {
+            syscall_open();
+        } else if (*(registers+REG_V0) == SYSCALL_MALLOC) {
+            syscall_malloc();
+		} else if (*(registers+REG_V0) == SYSCALL_YIELD) {
+		    syscall_yield();
+		} else if (*(registers+REG_V0) == SYSCALL_LOCK) {
+		    syscall_lock();
+		} else if (*(registers+REG_V0) == SYSCALL_UNLOCK) {
+		    syscall_unlock();
+		} else if(*(registers+REG_V0) == SYSCALL_GETPID){
+			syscall_getPID();
+		} else if(*(registers+REG_V0) == SYSCALL_FORK){
+			syscall_fork();
+		} else if(*(registers+REG_V0) == SYSCALL_WAIT){
+			syscall_wait();
+        } else {
+            exception_handler(EXCEPTION_UNKNOWNSYSCALL);
+        }
 
-    pc = pc + 4;
+        pc = pc + 4;
+    }
 }
 
 void fct_nop() {
-    pc = pc + 4;
-
-    if (debug_disassemble) {
+    if (debug) {
         printFunction(function);
         println();
     }
+
+    if (interpret)
+        pc = pc + 4;
 }
 
 void op_jal() {
-    *(registers+REG_RA) = pc + 8;
-
-    pc = instr_index * 4;
-
-    // TODO: execute delay slot
-
-    if (debug_disassemble) {
+    if (debug) {
         printOpcode(opcode);
         print((int*) " ");
-        print(itoa(instr_index, string_buffer, 16, 8));
+        print(itoa(instr_index, string_buffer, 16, 0, 0));
+        print((int*) "[");
+        print(itoa(instr_index * 4, string_buffer, 16, 0, 0));
+        print((int*) "]");
+        if (interpret) {
+            print((int*) ": ");
+            printRegister(REG_RA);
+            print((int*) "=");
+            print(itoa(*(registers+REG_RA), string_buffer, 16, 0, 0));
+        }
+    }
+
+    if (interpret) {
+        *(registers+REG_RA) = pc + 8;
+
+        pc = instr_index * 4;
+
+        // keep track of number of procedure calls
+        calls = calls + 1;
+
+        *(callsPerAddress + pc / 4) = *(callsPerAddress + pc / 4) + 1;
+
+        // TODO: execute delay slot
+    }
+
+    if (debug) {
+        if (interpret) {
+            print((int*) " -> ");
+            printRegister(REG_RA);
+            print((int*) "=");
+            print(itoa(*(registers+REG_RA), string_buffer, 16, 0, 0));
+            print((int*) ",$pc=");
+            print(itoa(pc, string_buffer, 16, 0, 0));
+        }
         println();
     }
 }
 
 void op_j() {
-    pc = instr_index * 4;
-
-    // TODO: execute delay slot
-
-    if (debug_disassemble) {
+    if (debug) {
         printOpcode(opcode);
         print((int*) " ");
-        print(itoa(instr_index, string_buffer, 16, 8));
+        print(itoa(instr_index, string_buffer, 16, 0, 0));
+        print((int*) "[");
+        print(itoa(instr_index * 4, string_buffer, 16, 0, 0));
+        print((int*) "]");
+    }
+
+    if (interpret) {
+        pc = instr_index * 4;
+
+        // TODO: execute delay slot
+    }
+
+    if (debug) {
+        if (interpret) {
+            print((int*) ": -> $pc=");
+            print(itoa(pc, string_buffer, 16, 0, 0));
+        }
         println();
     }
 }
 
 void op_beq() {
-    pc = pc + 4;
-
-    if (*(registers+rs) == *(registers+rt)) {
-        pc = pc + signExtend(immediate) * 4;
-
-        // TODO: execute delay slot
-    }
-
-    if (debug_disassemble) {
+    if (debug) {
         printOpcode(opcode);
         print((int*) " ");
         printRegister(rs);
-        putchar(',');
+        print((int*) ",");
         printRegister(rt);
-        putchar(',');
-        print(itoa(signExtend(immediate), string_buffer, 10, 0));
+        print((int*) ",");
+        print(itoa(signExtend(immediate), string_buffer, 10, 0, 0));
+        print((int*) "[");
+        print(itoa(pc + 4 + signExtend(immediate) * 4, string_buffer, 16, 0, 0));
+        print((int*) "]");
+        if (interpret) {
+            print((int*) ": ");
+            printRegister(rs);
+            print((int*) "=");
+            print(itoa(*(registers+rs), string_buffer, 10, 0, 0));
+            print((int*) ",");
+            printRegister(rt);
+            print((int*) "=");
+            print(itoa(*(registers+rt), string_buffer, 10, 0, 0));
+        }
+    }
+
+    if (interpret) {
+        pc = pc + 4;
+
+        if (*(registers+rs) == *(registers+rt)) {
+            pc = pc + signExtend(immediate) * 4;
+
+            if (signExtend(immediate) < 0) {
+                // keep track of number of loop iterations
+                loops = loops + 1;
+
+                *(loopsPerAddress + pc / 4) = *(loopsPerAddress + pc / 4) + 1;
+            }
+
+            // TODO: execute delay slot
+        }
+    }
+
+    if (debug) {
+        if (interpret) {
+            print((int*) " -> $pc=");
+            print(itoa(pc, string_buffer, 16, 0, 0));
+        }
         println();
     }
 }
 
 void op_bne() {
-    pc = pc + 4;
-
-    if (*(registers+rs) != *(registers+rt)) {
-        pc = pc + signExtend(immediate) * 4;
-
-        // TODO: execute delay slot
-    }
-
-    if (debug_disassemble) {
+    if (debug) {
         printOpcode(opcode);
         print((int*) " ");
         printRegister(rs);
-        putchar(',');
+        print((int*) ",");
         printRegister(rt);
-        putchar(',');
-        print(itoa(signExtend(immediate), string_buffer, 10, 0));
+        print((int*) ",");
+        print(itoa(signExtend(immediate), string_buffer, 10, 0, 0));
+        print((int*) "[");
+        print(itoa(pc + 4 + signExtend(immediate) * 4, string_buffer, 16, 0, 0));
+        print((int*) "]");
+        if (interpret) {
+            print((int*) ": ");
+            printRegister(rs);
+            print((int*) "=");
+            print(itoa(*(registers+rs), string_buffer, 10, 0, 0));
+            print((int*) ",");
+            printRegister(rt);
+            print((int*) "=");
+            print(itoa(*(registers+rt), string_buffer, 10, 0, 0));
+        }
+    }
+
+    if (interpret) {
+        pc = pc + 4;
+
+        if (*(registers+rs) != *(registers+rt)) {
+            pc = pc + signExtend(immediate) * 4;
+
+            // TODO: execute delay slot
+        }
+    }
+
+    if (debug) {
+        if (interpret) {
+            print((int*) " -> $pc=");
+            print(itoa(pc, string_buffer, 16, 0, 0));
+        }
         println();
     }
 }
 
 void op_addiu() {
-    *(registers+rt) = *(registers+rs) + signExtend(immediate);
-
-    // TODO: check for overflow
-
-    pc = pc + 4;
-
-    if (debug_disassemble) {
+    if (debug) {
         printOpcode(opcode);
         print((int*) " ");
         printRegister(rt);
-        putchar(',');
+        print((int*) ",");
         printRegister(rs);
-        putchar(',');
-        print(itoa(signExtend(immediate), string_buffer, 10, 0));
+        print((int*) ",");
+        print(itoa(signExtend(immediate), string_buffer, 10, 0, 0));
+        if (interpret) {
+            print((int*) ": ");
+            printRegister(rt);
+            print((int*) "=");
+            print(itoa(*(registers+rt), string_buffer, 10, 0, 0));
+            print((int*) ",");
+            printRegister(rs);
+            print((int*) "=");
+            print(itoa(*(registers+rs), string_buffer, 10, 0, 0));
+        }
+    }
+
+    if (interpret) {
+        *(registers+rt) = *(registers+rs) + signExtend(immediate);
+
+        // TODO: check for overflow
+
+        pc = pc + 4;
+    }
+
+    if (debug) {
+        if (interpret) {
+            print((int*) " -> ");
+            printRegister(rt);
+            print((int*) "=");
+            print(itoa(*(registers+rt), string_buffer, 10, 0, 0));
+        }
         println();
     }
 }
 
 void fct_jr() {
-    pc = *(registers+rs);
-
-    if (debug_disassemble) {
+    if (debug) {
         printFunction(function);
         print((int*) " ");
         printRegister(rs);
-        println();
+        if (interpret) {
+            print((int*) ": ");
+            printRegister(rs);
+            print((int*) "=");
+            print(itoa(*(registers+rs), string_buffer, 16, 0, 0));
+        }
     }
-}
 
-void op_lui() {
-    *(registers+rt) = leftShift(immediate, 16);
+    if (interpret)
+        pc = *(registers+rs);
 
-    pc = pc + 4;
-
-    if (debug_disassemble) {
-        printOpcode(opcode);
-        print((int*) " ");
-        printRegister(rt);
-        putchar(',');
-        print(itoa(signExtend(immediate), string_buffer, 10, 0));
+    if (debug) {
+        if (interpret) {
+            print((int*) " -> $pc=");
+            print(itoa(pc, string_buffer, 16, 0, 0));
+        }
         println();
     }
 }
 
 void fct_mfhi() {
-    *(registers+rd) = reg_hi;
-
-    pc = pc + 4;
-
-    if (debug_disassemble) {
+    if (debug) {
         printFunction(function);
         print((int*) " ");
         printRegister(rd);
+        if (interpret) {
+            print((int*) ": ");
+            printRegister(rd);
+            print((int*) "=");
+            print(itoa(*(registers+rd), string_buffer, 10, 0, 0));
+            print((int*) ",$hi=");
+            print(itoa(reg_hi, string_buffer, 10, 0, 0));
+        }
+    }
+
+    if (interpret) {
+        *(registers+rd) = reg_hi;
+
+        pc = pc + 4;
+    }
+
+    if (debug) {
+        if (interpret) {
+            print((int*) " -> ");
+            printRegister(rd);
+            print((int*) "=");
+            print(itoa(*(registers+rd), string_buffer, 10, 0, 0));
+        }
         println();
     }
 }
 
 void fct_mflo() {
-    *(registers+rd) = reg_lo;
-
-    pc = pc + 4;
-
-    if (debug_disassemble) {
+    if (debug) {
         printFunction(function);
         print((int*) " ");
         printRegister(rd);
+        if (interpret) {
+            print((int*) ": ");
+            printRegister(rd);
+            print((int*) "=");
+            print(itoa(*(registers+rd), string_buffer, 10, 0, 0));
+            print((int*) ",$lo=");
+            print(itoa(reg_lo, string_buffer, 10, 0, 0));
+        }
+    }
+
+    if (interpret) {
+        *(registers+rd) = reg_lo;
+
+        pc = pc + 4;
+    }
+
+    if (debug) {
+        if (interpret) {
+            print((int*) " -> ");
+            printRegister(rd);
+            print((int*) "=");
+            print(itoa(*(registers+rd), string_buffer, 10, 0, 0));
+        }
         println();
     }
 }
 
 void fct_multu() {
-    // TODO: 64-bit resolution currently not supported
-    reg_lo = *(registers+rs) * *(registers+rt);
-
-    pc = pc + 4;
-
-    if (debug_disassemble) {
+    if (debug) {
         printFunction(function);
         print((int*) " ");
         printRegister(rs);
-        putchar(',');
+        print((int*) ",");
         printRegister(rt);
+        if (interpret) {
+            print((int*) ": ");
+            printRegister(rs);
+            print((int*) "=");
+            print(itoa(*(registers+rs), string_buffer, 10, 0, 0));
+            print((int*) ",");
+            printRegister(rt);
+            print((int*) "=");
+            print(itoa(*(registers+rt), string_buffer, 10, 0, 0));
+            print((int*) ",$lo=");
+            print(itoa(reg_lo, string_buffer, 10, 0, 0));
+        }
+    }
+
+    if (interpret) {
+        // TODO: 64-bit resolution currently not supported
+        reg_lo = *(registers+rs) * *(registers+rt);
+
+        pc = pc + 4;
+    }
+
+    if (debug) {
+        if (interpret) {
+            print((int*) " -> $lo=");
+            print(itoa(reg_lo, string_buffer, 10, 0, 0));
+        }
         println();
     }
 }
 
 void fct_divu() {
-    reg_lo = *(registers+rs) / *(registers+rt);
-    reg_hi = *(registers+rs) % *(registers+rt);
-
-    pc = pc + 4;
-
-    if (debug_disassemble) {
+    if (debug) {
         printFunction(function);
         print((int*) " ");
         printRegister(rs);
-        putchar(',');
+        print((int*) ",");
         printRegister(rt);
+        if (interpret) {
+            print((int*) ": ");
+            printRegister(rs);
+            print((int*) "=");
+            print(itoa(*(registers+rs), string_buffer, 10, 0, 0));
+            print((int*) ",");
+            printRegister(rt);
+            print((int*) "=");
+            print(itoa(*(registers+rt), string_buffer, 10, 0, 0));
+            print((int*) ",$lo=");
+            print(itoa(reg_lo, string_buffer, 10, 0, 0));
+            print((int*) ",$hi=");
+            print(itoa(reg_hi, string_buffer, 10, 0, 0));
+        }
+    }
+
+    if (interpret) {
+        reg_lo = *(registers+rs) / *(registers+rt);
+        reg_hi = *(registers+rs) % *(registers+rt);
+
+        pc = pc + 4;
+    }
+
+    if (debug) {
+        if (interpret) {
+            print((int*) " -> $lo=");
+            print(itoa(reg_lo, string_buffer, 10, 0, 0));
+            print((int*) ",$hi=");
+            print(itoa(reg_hi, string_buffer, 10, 0, 0));
+        }
         println();
     }
 }
 
 void fct_addu() {
-    *(registers+rd) = *(registers+rs) + *(registers+rt);
-
-    pc = pc + 4;
-
-    if (debug_disassemble) {
+    if (debug) {
         printFunction(function);
         print((int*) " ");
         printRegister(rd);
-        putchar(',');
+        print((int*) ",");
         printRegister(rs);
-        putchar(',');
+        print((int*) ",");
         printRegister(rt);
+        if (interpret) {
+            print((int*) ": ");
+            printRegister(rd);
+            print((int*) "=");
+            print(itoa(*(registers+rd), string_buffer, 10, 0, 0));
+            print((int*) ",");
+            printRegister(rs);
+            print((int*) "=");
+            print(itoa(*(registers+rs), string_buffer, 10, 0, 0));
+            print((int*) ",");
+            printRegister(rt);
+            print((int*) "=");
+            print(itoa(*(registers+rt), string_buffer, 10, 0, 0));
+        }
+    }
+
+    if (interpret) {
+        *(registers+rd) = *(registers+rs) + *(registers+rt);
+
+        pc = pc + 4;
+    }
+
+    if (debug) {
+        if (interpret) {
+            print((int*) " -> ");
+            printRegister(rd);
+            print((int*) "=");
+            print(itoa(*(registers+rd), string_buffer, 10, 0, 0));
+        }
         println();
     }
 }
 
 void fct_subu() {
-    *(registers+rd) = *(registers+rs) - *(registers+rt);
-
-    pc = pc + 4;
-
-    if (debug_disassemble) {
+    if (debug) {
         printFunction(function);
         print((int*) " ");
         printRegister(rd);
-        putchar(',');
+        print((int*) ",");
         printRegister(rs);
-        putchar(',');
+        print((int*) ",");
         printRegister(rt);
+        if (interpret) {
+            print((int*) ": ");
+            printRegister(rd);
+            print((int*) "=");
+            print(itoa(*(registers+rd), string_buffer, 10, 0, 0));
+            print((int*) ",");
+            printRegister(rs);
+            print((int*) "=");
+            print(itoa(*(registers+rs), string_buffer, 10, 0, 0));
+            print((int*) ",");
+            printRegister(rt);
+            print((int*) "=");
+            print(itoa(*(registers+rt), string_buffer, 10, 0, 0));
+        }
+    }
+
+    if (interpret) {
+        *(registers+rd) = *(registers+rs) - *(registers+rt);
+
+        pc = pc + 4;
+    }
+
+    if (debug) {
+        if (interpret) {
+            print((int*) " -> ");
+            printRegister(rd);
+            print((int*) "=");
+            print(itoa(*(registers+rd), string_buffer, 10, 0, 0));
+        }
         println();
     }
 }
@@ -4997,41 +5718,91 @@ void fct_subu() {
 void op_lw() {
     int vaddr;
 
-    vaddr = *(registers+rs) + signExtend(immediate);
-
-    *(registers+rt) = loadMemory(vaddr);
-
-    pc = pc + 4;
-
-    if (debug_disassemble) {
+    if (debug) {
         printOpcode(opcode);
         print((int*) " ");
         printRegister(rt);
-        putchar(',');
-        print(itoa(signExtend(immediate), string_buffer, 10, 0));
-        putchar('(');
+        print((int*) ",");
+        print(itoa(signExtend(immediate), string_buffer, 10, 0, 0));
+        print((int*) "(");
         printRegister(rs);
-        putchar(')');
+        print((int*) ")");
+        if (interpret) {
+            print((int*) ": ");
+            printRegister(rt);
+            print((int*) "=");
+            print(itoa(*(registers+rt), string_buffer, 10, 0, 0));
+            print((int*) ",");
+            printRegister(rs);
+            print((int*) "=");
+            print(itoa(*(registers+rs), string_buffer, 16, 0, 0));
+        }
+    }
+
+    if (interpret) {
+        vaddr = *(registers+rs) + signExtend(immediate);
+
+        *(registers+rt) = loadMemory(vaddr);
+
+        // keep track of number of loads
+        loads = loads + 1;
+
+        *(loadsPerAddress + pc / 4) = *(loadsPerAddress + pc / 4) + 1;
+
+        pc = pc + 4;
+    }
+
+    if (debug) {
+        if (interpret) {
+            print((int*) " -> ");
+            printRegister(rt);
+            print((int*) "=");
+            print(itoa(*(registers+rt), string_buffer, 10, 0, 0));
+            print((int*) "=memory[vaddr=");
+            print(itoa(vaddr, string_buffer, 16, 0, 0));
+            print((int*) "]");
+        }
         println();
     }
 }
 
 void fct_slt() {
-    if (*(registers+rs) < *(registers+rt))
-        *(registers+rd) = 1;
-    else
-        *(registers+rd) = 0;
-
-    pc = pc + 4;
-
-    if (debug_disassemble) {
+    if (debug) {
         printFunction(function);
         print((int*) " ");
         printRegister(rd);
-        putchar(',');
+        print((int*) ",");
         printRegister(rs);
-        putchar(',');
+        print((int*) ",");
         printRegister(rt);
+        if (interpret) {
+            print((int*) ": ");
+            printRegister(rs);
+            print((int*) "=");
+            print(itoa(*(registers+rs), string_buffer, 10, 0, 0));
+            print((int*) ",");
+            printRegister(rt);
+            print((int*) "=");
+            print(itoa(*(registers+rt), string_buffer, 10, 0, 0));
+        }
+    }
+
+    if (interpret) {
+        if (*(registers+rs) < *(registers+rt))
+            *(registers+rd) = 1;
+        else
+            *(registers+rd) = 0;
+
+        pc = pc + 4;
+    }
+
+    if (debug) {
+        if (interpret) {
+            print((int*) " -> ");
+            printRegister(rd);
+            print((int*) "=");
+            print(itoa(*(registers+rd), string_buffer, 10, 0, 0));
+        }
         println();
     }
 }
@@ -5039,39 +5810,81 @@ void fct_slt() {
 void op_sw() {
     int vaddr;
 
-    vaddr = *(registers+rs) + signExtend(immediate);
-
-    storeMemory(vaddr, *(registers+rt));
-
-    pc = pc + 4;
-
-    if (debug_disassemble) {
+    if (debug) {
         printOpcode(opcode);
         print((int*) " ");
         printRegister(rt);
-        putchar(',');
-        print(itoa(signExtend(immediate), string_buffer, 10, 0));
-        putchar('(');
+        print((int*) ",");
+        print(itoa(signExtend(immediate), string_buffer, 10, 0, 0));
+        print((int*) "(");
         printRegister(rs);
-        putchar(')');
+        print((int*) ")");
+        if (interpret) {
+            print((int*) ": ");
+            printRegister(rt);
+            print((int*) "=");
+            print(itoa(*(registers+rt), string_buffer, 10, 0, 0));
+            print((int*) ",");
+            printRegister(rs);
+            print((int*) "=");
+            print(itoa(*(registers+rs), string_buffer, 16, 0, 0));
+        }
+    }
+
+    if (interpret) {
+        vaddr = *(registers+rs) + signExtend(immediate);
+
+        storeMemory(vaddr, *(registers+rt));
+
+        // keep track of number of stores
+        stores = stores + 1;
+
+        *(storesPerAddress + pc / 4) = *(storesPerAddress + pc / 4) + 1;
+
+        pc = pc + 4;
+    }
+
+    if (debug) {
+        if (interpret) {
+            print((int*) " -> memory[vaddr=");
+            print(itoa(vaddr, string_buffer, 16, 0, 0));
+            print((int*) "]=");
+            print(itoa(*(registers+rt), string_buffer, 10, 0, 0));
+            print((int*) "=");
+            printRegister(rt);
+        }
         println();
     }
 }
 
 void fct_teq() {
-    if (*(registers+rs) == *(registers+rt))
-        exception_handler(EXCEPTION_SIGNAL);
-
-    pc = pc + 4;
-
-    if (debug_disassemble) {
+    if (debug) {
         printFunction(function);
         print((int*) " ");
         printRegister(rs);
-        putchar(',');
+        print((int*) ",");
         printRegister(rt);
-        println();
+        if (interpret) {
+            print((int*) ": ");
+            printRegister(rs);
+            print((int*) "=");
+            print(itoa(*(registers+rs), string_buffer, 10, 0, 0));
+            print((int*) ",");
+            printRegister(rt);
+            print((int*) "=");
+            print(itoa(*(registers+rt), string_buffer, 10, 0, 0));
+        }
     }
+
+    if (interpret) {
+        if (*(registers+rs) == *(registers+rt))
+            exception_handler(EXCEPTION_SIGNAL);
+
+        pc = pc + 4;
+    }
+
+    if (debug)
+        println();
 }
 
 // -----------------------------------------------------------------
@@ -5091,40 +5904,31 @@ void exception_handler(int enumber) {
     exit(enumber);
 }
 
-void pre_debug() {
-    if (debug_disassemble) {
-        print(binaryName);
-        print((int*) ": $pc=");
-        print(itoa(pc, string_buffer, 16, 8));
-        print((int*) ": ");
-    }
-}
-
-void post_debug() {
-    int i;
-    if (debug_registers) {
-        i = 0;
-
-        while (i < 32) {
-            if (*(registers+i) != 0) {
-                print(binaryName);
-                print((int*) ": ");
-                printRegister(i);
-                putchar(CHAR_EQUAL);
-                print(itoa(*(registers+i), string_buffer, 16, 8));
-                println();
-            }
-            i = i + 1;
-        }
-        println();
-    }
-}
-
 void fetch() {
     ir = loadMemory(pc);
 }
 
 void execute() {
+    if (debug)
+        if (sourceLineNumber != (int*) 0) {
+            print(binaryName);
+            print((int*) ": ");
+        }
+
+    if (interpret)
+        if (debug)
+            print((int*) "$pc=");
+
+    if (debug) {
+        print(itoa(pc, string_buffer, 16, 8, 0));
+        if (sourceLineNumber != (int*) 0) {
+            print((int*) "(~");
+            print(itoa(*(sourceLineNumber + pc / 4), string_buffer, 10, 0, 0));
+            print((int*) ")");
+        }
+        print((int*) ": ");
+    }
+
     if (opcode == OP_SPECIAL) {
         if (function == FCT_NOP) {
             fct_nop();
@@ -5168,63 +5972,40 @@ void execute() {
     } else {
         exception_handler(EXCEPTION_UNKNOWNINSTRUCTION);
     }
-    
-//    printProcessVerbose(currProcess);
+
+    if (interpret == 0) {
+        if (pc == codeLength - 4)
+            halt = 1;
+        else
+            pc = pc + 4;
+    }
 }
 
 void run() {
 	int *listHead;
-	int counterInstr; // if yield is not called in the programm should still change every maxInstr
-//	int maxInstr;
-//	counterInstr = 0;
-//	maxInstr = 10;
+	halt = 0;
 	currProcess = removeFirst(readyQueue);
 	setProcessState();
-	 	
- 	while (1) {
+	while(halt==0){
  	    fetch();
- 	    if(getProcessID(currProcess) == 10)
- 	    printProcessVerbose(currProcess);
-	    if (*(registers+REG_V0) == SYSCALL_EXIT) {
-	    	if(0){
-		   		print((int*)"process with id ");
-		   		print(itoa(getProcessID(currProcess), string_buffer, 10,0));
-			   	print((int*)" reached end of file and terminates");println();
-			}
-			switchProcess(1);
-//			counterInstr = 0;
-//	    } else if (*(registers+REG_V0) == SYSCALL_YIELD) { 
-//	    	continueExecuting();
-//			counterInstr = 0;
-//     	} else if(counterInstr == maxInstr){
-//			continueExecuting();
-//			switchProcess(0);
-//			counterInstr = 0;
-		} else {
-       		continueExecuting();
-//		   	counterInstr = counterInstr + 1;
-       	}
+		continueExecuting();
+	 	if(counterInstr == maxInstr){
+			switchProcess(0);
+			counterInstr = 0;
 		
+		} else {
+		   	counterInstr = counterInstr + 1;
+	   	}
 	}
+    halt = 0;
+
+    interpret = 0;
+    debug     = 0;
 }
 
 void continueExecuting(){
 	decode();
-	pre_debug();
 	execute();
-	post_debug();
-}
-void parse_args(int argc, int *argv) {
-    // assert: ./selfie -m size executable {-m size executable}
-
-    // memory size in bytes and executable file name
-    initMemory(atoi((int*) *(argv+1)));
-
-    print(binaryName);
-    print((int*) ": memory size ");
-    print(itoa(memorySize / 1024 / 1024, string_buffer, 10, 0));
-    print((int*) "MB");
-    println();
 }
 
 void up_push(int value) {
@@ -5260,6 +6041,7 @@ int up_copyString(int *s) {
     w = a + l;
 
     if (l % 4 != 0)
+        // making sure w is a multiple of 4 bytes
         w = w + 4 - l % 4;
 
     t = a;
@@ -5294,9 +6076,7 @@ void up_copyArguments(int argc, int *argv) {
 
 void copyBinaryToMemory() {
     int a;
-
     a = 0;
-
     while (a < binaryLength) {
         storeMemory(a, loadBinary(a));
 
@@ -5304,20 +6084,159 @@ void copyBinaryToMemory() {
     }
 }
 
+int addressWithMaxCounter(int *counters, int max) {
+    int a;
+    int n;
+    int i;
+    int c;
+
+    a = -1;
+
+    n = 0;
+
+    i = 0;
+
+    while (i < maxBinaryLength / 4) {
+        c = *(counters + i);
+
+        if (n < c)
+            if (c < max) {
+                n = c;
+                a = i * 4;
+            }
+
+        i = i + 1;
+    }
+
+    return a;
+}
+
+int fixedPointRatio(int a, int b) {
+    // assert: a >= b
+    int r;
+
+    // compute fixed point ratio r with 2 fractional digits
+    
+    r = 0;
+    
+    // multiply a/b with 100 but avoid overflow
+
+    if (a <= INT_MAX / 100) {
+        if (b != 0)
+            r = a * 100 / b;
+    } else if (a <= INT_MAX / 10) {
+        if (b / 10 != 0)
+            r = a * 10 / (b / 10);
+    } else {
+        if (b / 100 != 0)
+            r = a / (b / 100);
+    }
+
+    // compute a/b in percent
+    // 1000000 = 10000 (for 100.00%) * 100 (for 2 fractional digits of r)
+
+    if (r != 0)
+        return 1000000 / r;
+    else
+        return 0;
+}
+
+int printCounters(int total, int *counters, int max) {
+    int a;
+
+    a = addressWithMaxCounter(counters, max);
+
+    print(itoa(*(counters + a / 4), string_buffer, 10, 0, 0));
+    
+    print((int*) "(");
+    print(itoa(fixedPointRatio(total, *(counters + a / 4)), string_buffer, 10, 0, 2));
+    print((int*) "%)");
+    
+    if (*(counters + a / 4) != 0) {
+        print((int*) "@");
+        print(itoa(a, string_buffer, 16, 8, 0));
+        if (sourceLineNumber != (int*) 0) {
+            print((int*) "(~");
+            print(itoa(*(sourceLineNumber + a / 4), string_buffer, 10, 0, 0));
+            print((int*) ")");
+        }
+    }
+
+    return a;
+}
+
+void printProfile(int *message, int total, int *counters) {
+    int a;
+
+    if (total > 0) {
+        print(selfieName);
+        print(message);
+        print(itoa(total, string_buffer, 10, 0, 0));
+        print((int*) ",");
+        a = printCounters(total, counters, INT_MAX); // max counter
+        print((int*) ",");
+        a = printCounters(total, counters, *(counters + a / 4)); // 2nd max
+        print((int*) ",");
+        a = printCounters(total, counters, *(counters + a / 4)); // 3rd max
+        println();
+    }
+}
+
+void disassemble() {
+    assemblyFD = open(assemblyName, O_CREAT_WRONLY_TRUNC, S_IRUSR_IWUSR_IRGRP_IROTH);
+
+    if (assemblyFD < 0) {
+        print(selfieName);
+        print((int*) ": could not create assembly output file ");
+        print(assemblyName);
+        println();
+
+        exit(-1);
+    }
+
+    print(selfieName);
+    print((int*) ": writing assembly into output file ");
+    print(assemblyName);
+    println();
+
+    outputName = assemblyName;
+    outputFD   = assemblyFD;
+
+    interpret = 0;
+    debug     = 1;
+
+    copyBinaryToMemory();
+    
+    resetInterpreter();
+
+    run();
+
+    outputName = (int*) 0;
+    outputFD   = 1;
+}
+
 void emulate(int argc, int *argv) {
 	int segmentSize;
-	int vaddr;
-	int i;
-	i =0;
 	isEmulating = 1;
-	segmentSize = 1024*1024;
-	
-	readyQueue = initList();
+	segmentSize = 4*1024*1024;
+    interpret = 1;
+
+    print(selfieName);
+    print((int*) ": this is selfie's mipster executing ");
+    print(binaryName);
+    print((int*) " with ");
+    print(itoa(memorySize / 1024 / 1024, string_buffer, 10, 0, 0));
+    print((int*) "MB of memory");
+    println();
+
+ 	copyBinaryToMemory();
+    resetInterpreter();
+
+ 	readyQueue = initList();
     segmentationTable = initList();
 	blockedQueue = initList();
-	waitingQueue = initList();
-    initInterpreter();
-    parse_args(argc, argv);
+	zombieQueue = initList();
+	
 	
 	currProcess = createProcess();
 	currSegment = createSegmentationTableEntry(getProcessID(currProcess), segmentSize);
@@ -5327,16 +6246,28 @@ void emulate(int argc, int *argv) {
 
 	setProcessState();
 
-    copyBinaryToMemory();
-
 	*(registers+REG_GP) = binaryLength;
 	*(registers+REG_K1) = *(registers+REG_GP);
-    *(registers+REG_SP) = *(currSegment+4)-4;
+	*(registers+REG_SP) = *(currSegment+4)-4;
 
-	up_copyArguments(argc-3, argv+3);
 	up_copyArguments(argc, argv);
+		
+    run();
 
-	run();
+    println();
+    println();
+    print(selfieName);
+    print((int*) ": this is selfie's mipster terminating ");
+    print(binaryName);
+    println();
+
+    print(selfieName);
+    print((int*) ": profile: total,max(ratio%)@addr(line#),2max(ratio%)@addr(line#),3max(ratio%)@addr(line#)");
+    println();
+    printProfile((int*) ": calls: ", calls, callsPerAddress);
+    printProfile((int*) ": loops: ", loops, loopsPerAddress);
+    printProfile((int*) ": loads: ", loads, loadsPerAddress);
+    printProfile((int*) ": stores: ", stores, storesPerAddress);
 }
 
 // -----------------------------------------------------------------
@@ -5370,6 +6301,22 @@ int selfie(int argc, int* argv) {
                     print(binaryName);
                     println();
                 }
+            } else if (stringCompare((int*) *argv, (int*) "-s")) {
+                assemblyName = (int*) *(argv+1);
+
+                argc = argc - 2;
+                argv = argv + 2;
+
+                if (binaryLength > 0) {
+                    initMemory(binaryLength);
+
+                    disassemble();
+                } else {
+                    print(selfieName);
+                    print((int*) ": nothing to disassemble to output file ");
+                    print(assemblyName);
+                    println();
+                }
             } else if (stringCompare((int*) *argv, (int*) "-l")) {
                 binaryName = (int*) *(argv+1);
 
@@ -5378,7 +6325,7 @@ int selfie(int argc, int* argv) {
 
                 load();
             } else if (stringCompare((int*) *argv, (int*) "-m")) {
-                initMemory(atoi((int*) *(argv+1)));
+                initMemory(atoi((int*) *(argv+1)) * MEGABYTE);
 
                 argc = argc - 1;
                 argv = argv + 1;
@@ -5386,11 +6333,34 @@ int selfie(int argc, int* argv) {
                 // pass binaryName as first argument replacing size
                 *argv = (int) binaryName;
 
-                if (binaryLength > 0)
+                if (binaryLength > 0) {
+                    debug = 0;
                     emulate(argc, argv);
-                else {
+                } else {
                     print(selfieName);
                     print((int*) ": nothing to emulate");
+                    println();
+
+                    exit(-1);
+                }
+
+                return 0;
+            } else if (stringCompare((int*) *argv, (int*) "-d")) {
+                initMemory(atoi((int*) *(argv+1)) * MEGABYTE);
+
+                argc = argc - 1;
+                argv = argv + 1;
+
+                // pass binaryName as first argument replacing size
+                *argv = (int) binaryName;
+
+                if (binaryLength > 0) {
+                    debug = 1;
+
+                    emulate(argc, argv);
+                } else {
+                    print(selfieName);
+                    print((int*) ": nothing to debug");
                     println();
 
                     exit(-1);
@@ -5428,7 +6398,7 @@ int main(int argc, int *argv) {
 
     if (selfie(argc, (int*) argv) != 0) {
         print(selfieName);
-        print((int*) ": usage: selfie { -c source | -o binary | -l binary } [ -m size ... | -k size ... ] ");
+        print((int*) ": usage: selfie { -c source | -o binary | -s assembly | -l binary } [ -m size ... | -d size ... | -k size ... ] ");
         println();
     }
 }

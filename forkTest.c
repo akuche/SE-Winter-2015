@@ -1,11 +1,13 @@
+
 int main(){
 	int pid;
 	int currentProcessID;
 	int counter;
 	counter = 0;
+//	lock();
 	pid = fork(); // pid = childpid
 	currentProcessID = getPID();
-
+	wait(pid);
 	putchar(10);
 	putchar('c');
 	putchar('u');
@@ -31,7 +33,6 @@ int main(){
 		putchar('d');
 		putchar('<');
 		putchar('0');
-		putchar(10);
 	} else if(pid > 0){
 		// i am parent, child exists with PID = 'pid'
 		// wait for child
@@ -47,7 +48,6 @@ int main(){
 		putchar('f');
 		putchar(' ');
 		putchar(pid+'0');
-		putchar(10);
 	} else { // pid == 0
 		// i am child
 		// do something
@@ -56,13 +56,9 @@ int main(){
 		putchar('i');
 		putchar('l');
 		putchar('d');
-		putchar(' ');
-		putchar('o');
-		putchar('f');
-		putchar(' ');
-		putchar(pid+'0');
-		putchar(10);
 	}
-	
+	putchar(10);
+//	unlock();
 	exit(0);
 }
+
