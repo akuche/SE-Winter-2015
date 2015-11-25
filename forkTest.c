@@ -7,7 +7,7 @@ int main(){
 //	lock();
 	pid = fork(); // pid = childpid
 	currentProcessID = getPID();
-	wait(pid);
+	//wait(pid);
 	putchar(10);
 	putchar('c');
 	putchar('u');
