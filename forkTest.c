@@ -4,7 +4,6 @@ int main(){
 	int currentProcessID;
 	int counter;
 	counter = 0;
-//	lock();
 	pid = fork(); // pid = childpid
 	currentProcessID = getPID();
 	wait(pid);
