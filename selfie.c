@@ -4918,7 +4918,7 @@ void duplicatePageTable(int *copyTo, int *copyFrom){
 			println();
 		
 			*copyTo = (int)pmalloc();
-			duplicatePageFrame(copyTo, copyFrom);
+			duplicatePageFrame((int*)*copyTo, (int*)*copyFrom);
 		}
 		copyTo = copyTo + 1;
 		copyFrom = copyFrom + 1;
